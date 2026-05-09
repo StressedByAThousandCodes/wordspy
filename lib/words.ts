@@ -3,7 +3,7 @@ export interface WordPair {
   spy: string
 }
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 const PROMPT = `You are a word game designer. Generate a word pair for a spy guessing game.
 Return ONLY a valid JSON object with exactly two keys: "civilian" and "spy".
