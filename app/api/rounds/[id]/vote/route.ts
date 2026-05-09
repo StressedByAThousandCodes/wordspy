@@ -129,11 +129,12 @@ async function resolveVoting(
       const wordPair = await generateWordPair()
       const roleMap = assignRoles(nextPlayers, room.spy_count)
 
+      // Reset all players to alive and assign new roles
       await Promise.all(
         nextPlayers.map((p: Player) =>
           supabase
             .from('players')
-            .update({ role: roleMap.get(p.id) })
+            .update({ role: roleMap.get(p.id), is_alive: true })
             .eq('id', p.id)
         )
       )

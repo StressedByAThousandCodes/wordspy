@@ -28,6 +28,21 @@ export default function GamePage() {
   const alivePlayers = players.filter((p) => p.is_alive);
   const isAlive = myPlayer?.is_alive ?? false;
 
+  const eliminatedPlayerId = votes.length > 0
+    ? (() => {
+        const counts = new Map<string, number>()
+        for (const v of votes) {
+          counts.set(v.target_id, (counts.get(v.target_id) ?? 0) + 1)
+        }
+        let max = 0, id: string | null = null
+        for (const [pid, count] of counts) {
+          if (count > max) { max = count; id = pid }
+          else if (count === max) id = null
+        }
+        return id
+      })()
+    : null;
+
   // ── Countdown timer synced to server ──────────────────────────
   useEffect(() => {
     if (!round?.phase_ends_at) return;
@@ -245,14 +260,13 @@ export default function GamePage() {
   const myWord =
     myPlayer?.role === "spy" ? round.spy_word : round.civilian_word;
 
-  const phaseDuration =
-    round.phase === "describing"
-      ? (room?.describe_seconds ?? 30)
-      : round.phase === "discussing"
-        ? (room?.discuss_seconds ?? 60)
-        : round.phase === "voting"
-          ? (room?.vote_seconds ?? 30)
-          : 10;
+  const phaseDuration = round.created_at
+    ? Math.round(
+        (new Date(round.phase_ends_at).getTime() -
+          new Date(round.created_at).getTime()) /
+          1000
+      )
+    : (room?.describe_seconds ?? 30);
 
   const timerPct = Math.min(100, (secondsLeft / phaseDuration) * 100);
   const timerColor = secondsLeft <= 10 ? "bg-red-500" : "bg-indigo-500";
@@ -426,7 +440,12 @@ export default function GamePage() {
 
       {/* ── Result phase ── */}
       {round.phase === "result" && (
-        <ResultPhase players={players} round={round} myPlayerId={myPlayerId} />
+        <ResultPhase
+          players={players}
+          round={round}
+          myPlayerId={myPlayerId}
+          eliminatedPlayerId={eliminatedPlayerId}
+        />
       )}
     </main>
   );
@@ -438,12 +457,16 @@ function ResultPhase({
   players,
   round,
   myPlayerId,
+  eliminatedPlayerId,
 }: {
   players: Player[];
   round: Round;
   myPlayerId: string | null;
+  eliminatedPlayerId: string | null;
 }) {
-  const eliminated = players.find((p) => !p.is_alive);
+  const eliminated = eliminatedPlayerId
+    ? players.find((p) => p.id === eliminatedPlayerId)
+    : null;
   const alivePlayers = players.filter((p) => p.is_alive);
   const spiesAlive = alivePlayers.filter((p) => p.role === "spy");
   const civiliansAlive = alivePlayers.filter((p) => p.role === "civilian");
