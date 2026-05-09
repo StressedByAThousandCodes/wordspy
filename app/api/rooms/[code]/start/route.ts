@@ -55,6 +55,20 @@ export async function POST(
     ),
   );
 
+  // ← ADD THE CLEANUP HERE
+  // Clean up all previous rounds for this room
+  const { data: oldRounds } = await supabase
+    .from('rounds')
+    .select('id')
+    .eq('room_id', room.id)
+
+  if (oldRounds && oldRounds.length > 0) {
+    const oldRoundIds = oldRounds.map((r: { id: string }) => r.id)
+    await supabase.from('votes').delete().in('round_id', oldRoundIds)
+    await supabase.from('descriptions').delete().in('round_id', oldRoundIds)
+    await supabase.from('rounds').delete().eq('room_id', room.id)
+  }
+
   // Create the first round
   const { data: round, error: roundErr } = await supabase
     .from("rounds")

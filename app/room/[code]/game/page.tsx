@@ -158,6 +158,9 @@ export default function GamePage() {
           setSubmitted(false);
           setVoted(false);
           setMyDescription("");
+          // Clear stale votes and descriptions before loading new round data
+          setVotes([]);
+          setDescriptions([]);
           await loadRoundData(updated.id);
         },
       )
