@@ -54,6 +54,7 @@ export default function GamePage() {
     tick();
     const id = setInterval(tick, 500);
     return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [round?.phase_ends_at]);
 
   // ── Initial data load ─────────────────────────────────────────
@@ -126,6 +127,7 @@ export default function GamePage() {
       .then((r) => r.json())
       .then((d) => console.log("Advance result:", d))
       .catch((e) => console.error("Advance failed:", e));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [secondsLeft, round?.id, round?.phase]);
 
   async function loadRoundData(roundId: string) {

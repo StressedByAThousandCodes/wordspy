@@ -49,7 +49,7 @@ export default function HomePage() {
           <h1 className="text-3xl font-bold tracking-tight">Who Is The Spy?</h1>
           <p className="text-gray-400 text-sm leading-relaxed">
             Everyone gets the same word — except the spy.<br />
-            Describe it. Discuss. Vote. Find the spy before it's too late.
+            Describe it. Discuss. Vote. Find the spy before it&apos;s too late.
           </p>
           <button
             onClick={() => setShowRules(!showRules)}
