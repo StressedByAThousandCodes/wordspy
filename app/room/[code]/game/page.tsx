@@ -21,6 +21,7 @@ export default function GamePage() {
   const [voted, setVoted] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [pendingVote, setPendingVote] = useState<string | null>(null)
   const roundRef = useRef<Round | null>(null);
   const hasAdvanced = useRef(false);
 
@@ -240,15 +241,21 @@ export default function GamePage() {
     if (!res.ok) setSubmitted(false);
   }
 
+  // Replace castVote function:
   async function castVote(targetId: string) {
-    if (!round || !myPlayerId || voted || !isAlive) return;
-    setVoted(true);
+    if (!round || !myPlayerId || voted || !isAlive) return
+    if (pendingVote !== targetId) {
+      setPendingVote(targetId)
+      return
+    }
+    setVoted(true)
+    setPendingVote(null)
     const res = await fetch(`/api/rounds/${round.id}/vote`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voterId: myPlayerId, targetId }),
-    });
-    if (!res.ok) setVoted(false);
+    })
+    if (!res.ok) setVoted(false)
   }
 
   // ── Render ────────────────────────────────────────────────────
@@ -283,7 +290,11 @@ export default function GamePage() {
             {round.phase} phase · Round {round.round_number}
           </span>
           <span
-            className={`font-mono font-bold ${secondsLeft <= 10 ? "text-red-400" : "text-white"}`}
+            className={`font-mono font-bold transition-all ${
+              secondsLeft <= 10
+                ? "text-red-400 animate-pulse scale-110 inline-block"
+                : "text-white"
+            }`}
           >
             {secondsLeft}s
           </span>
@@ -304,11 +315,11 @@ export default function GamePage() {
             <p className="text-4xl font-bold text-indigo-400 tracking-wide">
               {myWord}
             </p>
-            {myPlayer?.role === "spy" && (
+            {/* {myPlayer?.role === "spy" && (
               <span className="inline-block text-xs text-red-400 bg-red-400/10 px-3 py-1 rounded-full">
                 You are the spy 🕵️
               </span>
-            )}
+            )} */}
           </div>
 
           {isAlive && !submitted ? (
@@ -339,9 +350,18 @@ export default function GamePage() {
             </p>
           )}
 
-          <p className="text-center text-gray-600 text-xs">
-            {descriptions.length} / {alivePlayers.length} submitted
-          </p>
+          <div className="flex flex-wrap justify-center gap-2 pt-1">
+            {alivePlayers.map(p => {
+              const hasSubmitted = descriptions.some(d => d.player_id === p.id)
+              return (
+                <div key={p.id} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition
+                  ${hasSubmitted ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-gray-800 border-gray-700 text-gray-500'}`}>
+                  <span>{p.nickname}</span>
+                  {hasSubmitted && <span>✓</span>}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 
@@ -356,7 +376,8 @@ export default function GamePage() {
             return (
               <div
                 key={p.id}
-                className="rounded-xl bg-gray-800 border border-gray-700 p-4 space-y-2"
+                className={`rounded-xl bg-gray-800 p-4 space-y-2 border transition
+                  ${p.id === myPlayerId ? 'border-indigo-500/50' : 'border-gray-700'}`}
               >
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold">
@@ -403,28 +424,41 @@ export default function GamePage() {
                 (v) => v.voter_id === myPlayerId && v.target_id === p.id,
               );
               return (
+                // Replace the vote button JSX inside the voting phase:
                 <button
                   key={p.id}
                   onClick={() => castVote(p.id)}
                   disabled={voted || !isAlive}
-                  className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition
-                    ${
-                      iVotedFor
-                        ? "bg-red-500/10 border-red-500/50 text-red-300"
-                        : "bg-gray-800 border-gray-700 hover:border-red-400/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    }`}
+                  className={`w-full flex items-center justify-between px-4 py-3.5 rounded-xl border transition
+                    ${voted && iVotedFor ? 'bg-green-500/10 border-green-500/30 text-green-300'
+                    : pendingVote === p.id ? 'bg-red-500/10 border-red-400 text-red-300'
+                    : iVotedFor ? 'bg-red-500/10 border-red-500/50 text-red-300'
+                    : 'bg-gray-800 border-gray-700 hover:border-red-400/50 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-sm font-bold">
                       {p.nickname[0].toUpperCase()}
                     </div>
-                    <span className="font-medium">{p.nickname}</span>
+                    <div className="text-left">
+                      <span className="font-medium block">{p.nickname}</span>
+                      {pendingVote === p.id && !voted && (
+                        <span className="text-xs text-red-400">Tap again to confirm</span>
+                      )}
+                    </div>
                   </div>
-                  {voteCount > 0 && (
-                    <span className="text-sm text-gray-400">
-                      {voteCount} vote{voteCount > 1 ? "s" : ""}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-3">
+                    {voteCount > 0 && (
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 rounded-full bg-red-500/40 overflow-hidden" style={{ width: '48px' }}>
+                          <div className="h-full bg-red-400 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.min(100, (voteCount / alivePlayers.length) * 100)}%` }} />
+                        </div>
+                        <span className="text-sm text-gray-400 w-12 text-right">
+                          {voteCount} vote{voteCount > 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </button>
               );
             })}
@@ -513,6 +547,18 @@ function ResultPhase({
             </p>
           </div>
           <p className="text-gray-500 text-sm pt-2">Returning to lobby…</p>
+          <div className="pt-3 space-y-2">
+            <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">All roles revealed</p>
+            {players.map(p => (
+              <div key={p.id} className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm
+                ${p.role === 'spy' ? 'bg-red-500/10 border border-red-500/20' : 'bg-gray-800 border border-gray-700'}`}>
+                <span className="font-medium">{p.nickname}</span>
+                <span className={p.role === 'spy' ? 'text-red-400' : 'text-gray-400'}>
+                  {p.role === 'spy' ? '🕵️ Spy' : '👤 Civilian'}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
         <div className="space-y-3">
