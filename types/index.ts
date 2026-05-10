@@ -11,6 +11,8 @@ export interface Room {
   describe_seconds: number
   discuss_seconds: number
   vote_seconds: number
+  min_players: number
+  max_players: number
   created_at: string
 }
 

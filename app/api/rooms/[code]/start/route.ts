@@ -32,9 +32,9 @@ export async function POST(
     .select("*")
     .eq("room_id", room.id);
 
-  if (!players || players.length < 3) {
+  if (!players || players.length < (room.min_players ?? 3)) {
     return NextResponse.json(
-      { error: "Need at least 3 players" },
+      { error: `Need at least ${room.min_players ?? 3} players` },
       { status: 400 },
     );
   }
@@ -58,15 +58,15 @@ export async function POST(
   // ← ADD THE CLEANUP HERE
   // Clean up all previous rounds for this room
   const { data: oldRounds } = await supabase
-    .from('rounds')
-    .select('id')
-    .eq('room_id', room.id)
+    .from("rounds")
+    .select("id")
+    .eq("room_id", room.id);
 
   if (oldRounds && oldRounds.length > 0) {
-    const oldRoundIds = oldRounds.map((r: { id: string }) => r.id)
-    await supabase.from('votes').delete().in('round_id', oldRoundIds)
-    await supabase.from('descriptions').delete().in('round_id', oldRoundIds)
-    await supabase.from('rounds').delete().eq('room_id', room.id)
+    const oldRoundIds = oldRounds.map((r: { id: string }) => r.id);
+    await supabase.from("votes").delete().in("round_id", oldRoundIds);
+    await supabase.from("descriptions").delete().in("round_id", oldRoundIds);
+    await supabase.from("rounds").delete().eq("room_id", room.id);
   }
 
   // Create the first round

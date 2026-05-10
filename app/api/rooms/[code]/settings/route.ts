@@ -8,9 +8,16 @@ export async function PATCH(
   const supabase = createServiceClient()
   const body = await req.json()
 
-  const allowed = ['spy_count', 'describe_seconds', 'discuss_seconds', 'vote_seconds']
-  const updates: Record<string, number> = {}
+  const allowed = [
+    'spy_count',
+    'describe_seconds',
+    'discuss_seconds',
+    'vote_seconds',
+    'min_players',
+    'max_players',
+  ]
 
+  const updates: Record<string, number> = {}
   for (const key of allowed) {
     if (typeof body[key] === 'number') updates[key] = body[key]
   }
