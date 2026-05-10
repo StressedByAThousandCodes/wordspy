@@ -233,7 +233,7 @@ export default function LobbyPage() {
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}&bgcolor=09090f&color=a78bfa&margin=16`;
 
   return (
-    <main className="min-h-screen bg-[#0a0a0f] pb-32 px-4">
+    <main className="min-h-screen bg-[#0a0a0f] pb-56 px-4">
       <div className="absolute inset-0 bg-[linear-gradient(rgba(139,92,246,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(139,92,246,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none" />
 
       <div className="relative z-10 max-w-sm mx-auto pt-10 space-y-5">
@@ -464,7 +464,7 @@ export default function LobbyPage() {
             </div>
 
             {/* Messages */}
-            <div className="h-48 overflow-y-auto px-3 py-3 space-y-2 scrollbar-none">
+            <div className="h-36 overflow-y-auto px-3 py-3 space-y-2 scrollbar-none">
               {messages.length === 0 && (
                 <p className="text-center text-zinc-700 text-xs py-4">
                   No messages yet — say hi! 👋
