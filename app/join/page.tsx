@@ -23,6 +23,21 @@ function JoinForm() {
     setTimeout(() => nicknameRef.current?.focus(), 300)
   }, [searchParams])
 
+  // Add after the existing useEffect in JoinForm:
+  useEffect(() => {
+    async function checkReturning() {
+      const deviceToken = getOrCreateDeviceToken()
+      try {
+        const res = await fetch(`/api/users?deviceToken=${deviceToken}`)
+        const data = await res.json()
+        if (data.user) setNickname(data.user.nickname)
+      } catch (e) {
+        // ignore
+      }
+    }
+    checkReturning()
+  }, [])
+
   function handleCodeChange(i: number, value: string) {
     const char = value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(-1)
     const next = [...code]
@@ -51,6 +66,16 @@ function JoinForm() {
     setError('')
     try {
       const deviceToken = getOrCreateDeviceToken()
+
+      // Save/verify guest account first
+      const userRes = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: nickname.trim(), deviceToken }),
+      })
+      const userData = await userRes.json()
+      if (!userRes.ok) throw new Error(userData.error || 'Failed to save account')
+
       const res = await fetch(`/api/rooms/${fullCode}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -51,3 +51,19 @@ export interface Vote {
   target_id: string
   created_at: string
 }
+
+export interface ChatMessage {
+  id: string
+  room_id: string
+  player_id: string
+  content: string
+  created_at: string
+}
+
+export interface User {
+  id: string
+  nickname: string
+  device_token: string
+  created_at: string
+  last_seen_at: string
+}
