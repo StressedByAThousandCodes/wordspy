@@ -233,7 +233,7 @@ export default function LobbyPage() {
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}&bgcolor=09090f&color=a78bfa&margin=16`;
 
   return (
-    <main className="min-h-screen bg-[#0a0a0f] pb-56 px-4">
+    <main className="min-h-screen bg-[#0a0a0f] pb-64 px-4">
       <div className="absolute inset-0 bg-[linear-gradient(rgba(139,92,246,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(139,92,246,0.02)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none" />
 
       <div className="relative z-10 max-w-sm mx-auto pt-10 space-y-5">
@@ -552,8 +552,8 @@ export default function LobbyPage() {
       </div>
 
       {/* Fixed bottom actions */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-[#0a0a0f] via-[#0a0a0f]/95 to-transparent">
-        <div className="max-w-sm mx-auto space-y-3">
+      <div className="fixed bottom-0 left-0 right-0 bg-[#0a0a0f] border-t border-zinc-900">
+        <div className="max-w-sm mx-auto px-4 pt-3 pb-6 space-y-3">
           <button
             onClick={toggleReady}
             className={`w-full py-4 rounded-2xl font-bold text-base transition-all duration-200
