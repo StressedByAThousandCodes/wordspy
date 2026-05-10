@@ -20,7 +20,6 @@ export default function GamePage() {
   const [myDescription, setMyDescription] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [voted, setVoted] = useState(false);
-  const [pendingVote, setPendingVote] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showDescribeModal, setShowDescribeModal] = useState(false);
@@ -123,24 +122,29 @@ export default function GamePage() {
 
   // Client-side phase advancement
   useEffect(() => {
-    if (secondsLeft !== 0) return
-    if (!round || round.phase === 'result') return
-    if (hasAdvanced.current) return
+    if (secondsLeft !== 0) return;
+    if (!round || round.phase === "result") return;
+    if (hasAdvanced.current) return;
 
     // All alive players try — the server guard prevents double-advancing
-    hasAdvanced.current = true
+    hasAdvanced.current = true;
 
-    console.log('Timer expired, advancing phase:', round.phase, 'round:', round.id)
+    console.log(
+      "Timer expired, advancing phase:",
+      round.phase,
+      "round:",
+      round.id,
+    );
 
-    fetch(`/api/rounds/${round.id}/advance`, { method: 'POST' })
-      .then(r => r.json())
-      .then(d => console.log('Advance result:', d))
-      .catch(e => {
-        console.error('Advance failed:', e)
-        hasAdvanced.current = false // allow retry on failure
-      })
+    fetch(`/api/rounds/${round.id}/advance`, { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => console.log("Advance result:", d))
+      .catch((e) => {
+        console.error("Advance failed:", e);
+        hasAdvanced.current = false; // allow retry on failure
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secondsLeft, round?.id, round?.phase])
+  }, [secondsLeft, round?.id, round?.phase]);
 
   async function loadRoundData(roundId: string) {
     const [{ data: descData }, { data: voteData }] = await Promise.all([
@@ -171,7 +175,6 @@ export default function GamePage() {
           setSubmitted(false);
           setVoted(false);
           setMyDescription("");
-          setPendingVote(null);
           setVotes([]);
           setDescriptions([]);
           await loadRoundData(updated.id);
@@ -245,13 +248,15 @@ export default function GamePage() {
   }
 
   async function castVote(targetId: string) {
-    if (!round || !myPlayerId || voted || !isAlive) return;
-    if (pendingVote !== targetId) {
-      setPendingVote(targetId);
-      return;
-    }
+    if (!round || !myPlayerId || !isAlive) return;
+
+    // If already voted for this player, do nothing
+    const existingVote = votes.find((v) => v.voter_id === myPlayerId);
+    if (existingVote?.target_id === targetId) return;
+
+    // Optimistically update local state
     setVoted(true);
-    setPendingVote(null);
+
     const res = await fetch(`/api/rounds/${round.id}/vote`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -476,7 +481,6 @@ export default function GamePage() {
                 const iVotedFor = !!votes.find(
                   (v) => v.voter_id === myPlayerId && v.target_id === p.id,
                 );
-                const isPending = pendingVote === p.id;
 
                 return (
                   <button
@@ -486,10 +490,8 @@ export default function GamePage() {
                     className={`w-full flex items-center gap-3 p-4 rounded-2xl border transition-all duration-200 text-left
                     ${
                       iVotedFor
-                        ? "border-green-500/40 bg-green-500/5"
-                        : isPending
-                          ? "border-red-400 bg-red-500/10 scale-[1.02]"
-                          : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                        ? "border-violet-500/40 bg-violet-500/5"
+                        : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
                     }`}
                   >
                     <div
@@ -501,14 +503,9 @@ export default function GamePage() {
                       <p className="font-bold text-white text-sm">
                         {p.nickname}
                       </p>
-                      {isPending && !voted && (
-                        <p className="text-xs text-red-400 font-semibold mt-0.5">
-                          Tap again to confirm vote
-                        </p>
-                      )}
                       {iVotedFor && (
-                        <p className="text-xs text-green-400 font-semibold mt-0.5">
-                          ✓ You voted for this player
+                        <p className="text-xs text-violet-400 font-semibold mt-0.5">
+                          ✓ Your vote — tap another to change
                         </p>
                       )}
                       {voteCount > 0 && (
@@ -532,10 +529,8 @@ export default function GamePage() {
               })}
 
             {voted && (
-              <div className="text-center py-3 bg-green-500/10 border border-green-500/20 rounded-2xl">
-                <p className="text-green-400 font-bold text-sm">
-                  ✓ Vote cast! Waiting for others…
-                </p>
+              <div className="text-center py-3 bg-violet-500/10 border border-violet-500/20 rounded-2xl">
+                <p className="text-violet-400 font-bold text-sm">✓ Vote cast — tap another player to change</p>
               </div>
             )}
 

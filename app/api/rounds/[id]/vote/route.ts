@@ -29,17 +29,15 @@ export async function POST(
     return NextResponse.json({ error: 'Not in voting phase' }, { status: 400 })
   }
 
-  // Insert vote — unique constraint prevents double voting
-  const { error } = await supabase.from('votes').insert({
-    round_id: params.id,
-    voter_id: voterId,
-    target_id: targetId,
-  })
+  // Upsert — allows changing vote while timer is running
+  const { error } = await supabase
+    .from('votes')
+    .upsert(
+      { round_id: params.id, voter_id: voterId, target_id: targetId },
+      { onConflict: 'round_id,voter_id' }
+    )
 
   if (error) {
-    if (error.code === '23505') {
-      return NextResponse.json({ error: 'Already voted' }, { status: 409 })
-    }
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 

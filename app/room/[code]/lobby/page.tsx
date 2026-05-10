@@ -95,17 +95,44 @@ export default function LobbyPage() {
             .select("*")
             .eq("room_id", room.id)
             .order("joined_at");
-          if (data) {
-            const incoming = new Set(data.map((p: Player) => p.id));
-            const brand = new Set(
-              [...incoming].filter((id) => !prevPlayerIds.current.has(id)),
-            );
-            if (brand.size > 0) {
-              setNewPlayerIds(brand);
-              setTimeout(() => setNewPlayerIds(new Set()), 800);
+          if (!data) return;
+
+          const incoming = new Set(data.map((p: Player) => p.id));
+          const brand = new Set(
+            [...incoming].filter((id) => !prevPlayerIds.current.has(id)),
+          );
+          if (brand.size > 0) {
+            setNewPlayerIds(brand);
+            setTimeout(() => setNewPlayerIds(new Set()), 800);
+          }
+          prevPlayerIds.current = incoming;
+          setPlayers(data);
+
+          // If host left and we are the earliest joined remaining player, promote ourselves
+          const { data: currentRoom } = await supabase
+            .from("rooms")
+            .select("*")
+            .eq("code", code)
+            .single();
+          if (!currentRoom) return;
+          const hostStillHere = data.some(
+            (p: Player) => p.id === currentRoom.host_id,
+          );
+          if (!hostStillHere && data.length > 0) {
+            // Pick a random remaining player as new host
+            const newHost = data[Math.floor(Math.random() * data.length)];
+            // Only the player with the lowest joined_at does the update to avoid race conditions
+            const earliest = [...data].sort(
+              (a: Player, b: Player) =>
+                new Date(a.joined_at).getTime() -
+                new Date(b.joined_at).getTime(),
+            )[0];
+            if (earliest.id === myPlayerId) {
+              await supabase
+                .from("rooms")
+                .update({ host_id: newHost.id })
+                .eq("id", currentRoom.id);
             }
-            prevPlayerIds.current = incoming;
-            setPlayers(data);
           }
         },
       )
@@ -123,11 +150,17 @@ export default function LobbyPage() {
           if (updated.status === "playing") router.push(`/room/${code}/game`);
         },
       )
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${room.id}` },
-        payload => {
-          setMessages(prev => [...prev, payload.new as ChatMessage])
-        }
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `room_id=eq.${room.id}`,
+        },
+        (payload) => {
+          setMessages((prev) => [...prev, payload.new as ChatMessage]);
+        },
       )
       .subscribe();
     return () => {
@@ -170,15 +203,19 @@ export default function LobbyPage() {
   }
 
   async function sendMessage() {
-    if (!chatInput.trim() || !myPlayerId || !room) return
-    setSendingChat(true)
-    await fetch('/api/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId: room.id, playerId: myPlayerId, content: chatInput.trim() }),
-    })
-    setChatInput('')
-    setSendingChat(false)
+    if (!chatInput.trim() || !myPlayerId || !room) return;
+    setSendingChat(true);
+    await fetch("/api/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        roomId: room.id,
+        playerId: myPlayerId,
+        content: chatInput.trim(),
+      }),
+    });
+    setChatInput("");
+    setSendingChat(false);
   }
 
   function copyLink() {
@@ -421,40 +458,56 @@ export default function LobbyPage() {
         {room && (
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
             <div className="px-4 py-3 border-b border-zinc-800">
-              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">💬 Lobby Chat</p>
+              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">
+                💬 Lobby Chat
+              </p>
             </div>
 
             {/* Messages */}
             <div className="h-48 overflow-y-auto px-3 py-3 space-y-2 scrollbar-none">
               {messages.length === 0 && (
-                <p className="text-center text-zinc-700 text-xs py-4">No messages yet — say hi! 👋</p>
+                <p className="text-center text-zinc-700 text-xs py-4">
+                  No messages yet — say hi! 👋
+                </p>
               )}
-              {messages.map(msg => {
-                const sender = players.find(p => p.id === msg.player_id)
-                const isMe = msg.player_id === myPlayerId
-                const emoji = sender ? getPlayerEmoji(sender.id) : '❓'
-                const color = sender ? getPlayerColor(sender.id) : { bg: 'from-zinc-500 to-zinc-600' }
+              {messages.map((msg) => {
+                const sender = players.find((p) => p.id === msg.player_id);
+                const isMe = msg.player_id === myPlayerId;
+                const emoji = sender ? getPlayerEmoji(sender.id) : "❓";
+                const color = sender
+                  ? getPlayerColor(sender.id)
+                  : { bg: "from-zinc-500 to-zinc-600" };
                 return (
-                  <div key={msg.id} className={`flex items-start gap-2 ${isMe ? 'flex-row-reverse' : ''}`}>
-                    <div className={`w-7 h-7 rounded-xl bg-gradient-to-br ${color.bg} flex items-center justify-center text-sm shrink-0 mt-0.5`}>
+                  <div
+                    key={msg.id}
+                    className={`flex items-start gap-2 ${isMe ? "flex-row-reverse" : ""}`}
+                  >
+                    <div
+                      className={`w-7 h-7 rounded-xl bg-gradient-to-br ${color.bg} flex items-center justify-center text-sm shrink-0 mt-0.5`}
+                    >
                       {emoji}
                     </div>
-                    <div className={`max-w-[75%] ${isMe ? 'items-end' : 'items-start'} flex flex-col gap-0.5`}>
+                    <div
+                      className={`max-w-[75%] ${isMe ? "items-end" : "items-start"} flex flex-col gap-0.5`}
+                    >
                       {!isMe && (
                         <span className="text-[10px] text-zinc-600 font-medium px-1">
-                          {sender?.nickname ?? 'Unknown'}
+                          {sender?.nickname ?? "Unknown"}
                         </span>
                       )}
-                      <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed
-                        ${isMe
-                          ? 'bg-violet-600 text-white rounded-tr-sm'
-                          : 'bg-zinc-800 text-zinc-200 rounded-tl-sm'
-                        }`}>
+                      <div
+                        className={`px-3 py-2 rounded-2xl text-sm leading-relaxed
+                        ${
+                          isMe
+                            ? "bg-violet-600 text-white rounded-tr-sm"
+                            : "bg-zinc-800 text-zinc-200 rounded-tl-sm"
+                        }`}
+                      >
                         {msg.content}
                       </div>
                     </div>
                   </div>
-                )
+                );
               })}
               <div ref={chatEndRef} />
             </div>
@@ -465,8 +518,10 @@ export default function LobbyPage() {
                 type="text"
                 placeholder="Say something…"
                 value={chatInput}
-                onChange={e => setChatInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && !e.shiftKey && sendMessage()
+                }
                 maxLength={200}
                 className="flex-1 bg-zinc-800 border border-zinc-700 text-white placeholder-zinc-600 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-violet-500 transition"
               />
@@ -474,11 +529,15 @@ export default function LobbyPage() {
                 onClick={sendMessage}
                 disabled={!chatInput.trim() || sendingChat}
                 className="w-10 h-10 rounded-xl flex items-center justify-center text-white disabled:opacity-40 transition shrink-0"
-                style={{ background: 'linear-gradient(135deg, #7c3aed, #a855f7)' }}
+                style={{
+                  background: "linear-gradient(135deg, #7c3aed, #a855f7)",
+                }}
               >
                 {sendingChat ? (
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : '↑'}
+                ) : (
+                  "↑"
+                )}
               </button>
             </div>
           </div>
