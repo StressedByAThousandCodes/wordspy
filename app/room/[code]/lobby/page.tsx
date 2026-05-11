@@ -90,7 +90,17 @@ export default function LobbyPage() {
         payload => { const updated = payload.new as Room; setRoom(updated); if (updated.status === 'playing') router.push(`/room/${code}/game`) })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${room.id}` },
         payload => setMessages(prev => [...prev, payload.new as ChatMessage]))
+        // Detect presence disconnects — remove players who leave without clicking Leave
+      .on('presence', { event: 'leave' }, async ({ leftPresences }: any) => {
+        for (const presence of leftPresences) {
+          if (presence.playerId && presence.playerId !== myPlayerId) {
+            await supabase.from('players').delete().eq('id', presence.playerId)
+          }
+        }
+      })
       .subscribe()
+      // Track this player's presence
+    channel.track({ playerId: myPlayerId })
     return () => { supabase.removeChannel(channel) }
   }, [room, code, router, myPlayerId])
 
@@ -118,8 +128,13 @@ export default function LobbyPage() {
 
   async function handleLeave() {
     setLeaving(true)
-    if (myPlayerId) await supabase.from('players').delete().eq('id', myPlayerId)
+    if (myPlayerId) {
+      // Delete via API to use service role key — more reliable than client delete
+      await fetch(`/api/players/${myPlayerId}`, { method: 'DELETE' })
+    }
     sessionStorage.removeItem('playerId')
+    sessionStorage.removeItem('deviceToken')
+    sessionStorage.removeItem('nickname')
     router.push('/')
   }
 
@@ -250,8 +265,13 @@ export default function LobbyPage() {
                   const isNew = newPlayerIds.has(p.id)
                   return (
                     <Card key={p.id}
-                      className={`flex items-center gap-3 p-3 transition-all duration-300 ${isNew ? 'scale-[1.01]' : ''}`}
-                      style={isMe ? { borderColor: 'var(--accent)', background: 'var(--accent-bg)' } : {}}>
+                      className={`relative flex items-center gap-3 p-3 pl-4 overflow-hidden transition-all duration-300 ${isNew ? 'scale-[1.01]' : ''}`}
+                      style={isMe
+                        ? { borderColor: 'var(--accent)', background: 'var(--accent-bg)' }
+                        : { borderColor: 'var(--border)', background: 'var(--bg-2)' }
+                      }>
+                      {/* Colored left strip */}
+                      <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl bg-gradient-to-b ${color.bg}`} />
                       {/* Avatar */}
                       <div className={`relative w-10 h-10 rounded-xl bg-gradient-to-br ${color.bg} flex items-center justify-center text-lg shrink-0`}>
                         {emoji}

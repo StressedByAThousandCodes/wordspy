@@ -125,7 +125,7 @@ function JoinForm() {
             <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>
               Room Code
             </label>
-            <div className="flex gap-1.5 justify-between">
+            <div className="flex gap-1 xs:gap-1.5 justify-between">
               {code.map((char, i) => (
                 <input
                   key={i}
@@ -137,7 +137,7 @@ function JoinForm() {
                   onKeyDown={e => handleCodeKeyDown(i, e)}
                   onPaste={handleCodePaste}
                   maxLength={1}
-                  className="flex-1 h-12 text-center text-base font-display font-bold rounded-xl uppercase outline-none transition-all duration-150"
+                  className="w-0 flex-1 h-11 text-center text-sm font-display font-bold rounded-xl uppercase outline-none transition-all duration-150 min-w-0"
                   style={{
                     background: 'var(--bg-2)',
                     border: `1px solid ${char ? 'var(--accent)' : 'var(--border)'}`,

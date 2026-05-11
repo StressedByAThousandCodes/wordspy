@@ -3,8 +3,7 @@ export interface WordPair {
   spy: string
 }
 
-const GEMINI_API_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 const PROMPT = `Return ONLY a JSON object, no other text, no markdown, no explanation.
 The JSON must have exactly two keys: "civilian" and "spy".
@@ -133,57 +132,6 @@ function getFallbackWordPair(): WordPair {
   return FALLBACK_WORD_PAIRS[Math.floor(Math.random() * FALLBACK_WORD_PAIRS.length)]
 }
 
-// async function generateFromGemini(apiKey: string): Promise<WordPair> {
-//   const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-//     method: 'POST',
-//     headers: { 'Content-Type': 'application/json' },
-//     body: JSON.stringify({
-//       contents: [{ parts: [{ text: PROMPT }] }],
-//       generationConfig: {
-//         temperature: 0.9,
-//         maxOutputTokens: 60,         // JSON object is ~30 tokens, 60 is safe
-//         responseMimeType: 'application/json',
-//         responseSchema: {
-//           type: 'object',
-//           properties: {
-//             civilian: { type: 'string' },
-//             spy:      { type: 'string' },
-//           },
-//           required: ['civilian', 'spy'],
-//         },
-//       },
-//     }),
-//   })
-
-//   if (!response.ok) {
-//     const err = await response.text()
-//     throw new Error(`Gemini API error ${response.status}: ${err}`)
-//   }
-
-//   const data = await response.json()
-//   const rawText: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
-//   console.log('Gemini raw response:', JSON.stringify(rawText))
-
-//   // Try parsing directly first (responseMimeType should give clean JSON)
-//   try {
-//     const pair = JSON.parse(rawText) as WordPair
-//     if (pair.civilian && pair.spy) return pair
-//   } catch { /* fall through to extraction */ }
-
-//   // Fallback — extract first {...} block
-//   const jsonMatch = rawText.match(/\{[\s\S]*?\}/)
-//   if (!jsonMatch) {
-//     throw new Error(`No JSON object found in Gemini response: ${JSON.stringify(rawText)}`)
-//   }
-
-//   const pair = JSON.parse(jsonMatch[0]) as WordPair
-//   if (!pair.civilian || !pair.spy) {
-//     throw new Error(`Invalid word pair shape: ${JSON.stringify(pair)}`)
-//   }
-
-//   return pair
-// }
-
 async function generateFromGemini(apiKey: string): Promise<WordPair> {
   const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
     method: 'POST',
@@ -191,8 +139,8 @@ async function generateFromGemini(apiKey: string): Promise<WordPair> {
     body: JSON.stringify({
       contents: [{ parts: [{ text: PROMPT }] }],
       generationConfig: {
-        temperature: 0.9,
-        maxOutputTokens: 200,
+        temperature: 1.0,
+        maxOutputTokens: 500,
         responseMimeType: 'application/json',
         responseSchema: {
           type: 'OBJECT',
@@ -202,6 +150,11 @@ async function generateFromGemini(apiKey: string): Promise<WordPair> {
           },
           required: ['civilian', 'spy'],
         },
+      },
+      // Disable thinking for structured output — thinking models
+      // return reasoning tokens separately which breaks JSON parsing
+      thinkingConfig: {
+        thinkingBudget: 0,
       },
     }),
   })
@@ -213,27 +166,33 @@ async function generateFromGemini(apiKey: string): Promise<WordPair> {
 
   const data = await response.json()
 
-  // Log the full response structure to diagnose issues
-  console.log('Gemini full response:', JSON.stringify(data, null, 2))
+  // gemini-2.5-flash may return multiple parts — find the non-thought one
+  const parts: any[] = data.candidates?.[0]?.content?.parts ?? []
+  console.log('Gemini parts count:', parts.length)
 
-  const candidate = data.candidates?.[0]
-  const rawText: string = candidate?.content?.parts?.[0]?.text ?? ''
+  // Filter out thinking parts (they have a "thought: true" flag)
+  const textPart = parts.find((p: any) => !p.thought && p.text) ?? parts[0]
+  const rawText: string = textPart?.text ?? ''
+
   console.log('Gemini raw text:', JSON.stringify(rawText))
-  console.log('Finish reason:', candidate?.finishReason)
+  console.log('Finish reason:', data.candidates?.[0]?.finishReason)
 
   if (!rawText) {
-    throw new Error(`Empty response from Gemini. Finish reason: ${candidate?.finishReason}. Full: ${JSON.stringify(data)}`)
+    throw new Error(
+      `Empty response from Gemini. Full: ${JSON.stringify(data).slice(0, 500)}`
+    )
   }
 
+  // Try direct parse first (responseMimeType + responseSchema should give clean JSON)
   try {
     const pair = JSON.parse(rawText) as WordPair
     if (pair.civilian && pair.spy) return pair
-    throw new Error(`Missing keys in: ${JSON.stringify(pair)}`)
-  } catch (e) {
-    // Try extracting JSON block as last resort
-    const jsonMatch = rawText.match(/\{[\s\S]*?\}/)
-    if (jsonMatch) {
-      const pair = JSON.parse(jsonMatch[0]) as WordPair
+    throw new Error(`Missing keys: ${JSON.stringify(pair)}`)
+  } catch {
+    // Last resort — extract JSON block
+    const match = rawText.match(/\{[\s\S]*?\}/)
+    if (match) {
+      const pair = JSON.parse(match[0]) as WordPair
       if (pair.civilian && pair.spy) return pair
     }
     throw new Error(`Could not parse JSON from: ${JSON.stringify(rawText)}`)

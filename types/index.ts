@@ -22,7 +22,7 @@ export interface Player {
   nickname: string
   is_ready: boolean
   is_alive: boolean
-  role: PlayerRole | null
+  role?: PlayerRole | null
   device_token: string
   joined_at: string
 }
