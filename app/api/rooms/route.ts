@@ -29,8 +29,10 @@ export async function POST(req: NextRequest) {
       host_id: '00000000-0000-0000-0000-000000000000',
       status: 'lobby',
       spy_count: 1,
+      min_players: 2,
+      max_players: 16,
       describe_seconds: 30,
-      discuss_seconds: 60,
+      discuss_seconds: 45,
       vote_seconds: 30,
     })
     .select()

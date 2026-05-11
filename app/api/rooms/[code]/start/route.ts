@@ -32,11 +32,8 @@ export async function POST(
     .select("*")
     .eq("room_id", room.id);
 
-  if (!players || players.length < (room.min_players ?? 3)) {
-    return NextResponse.json(
-      { error: `Need at least ${room.min_players ?? 3} players` },
-      { status: 400 },
-    );
+  if (!players || players.length < (room.min_players ?? 2)) {
+    return NextResponse.json({ error: `Need at least ${room.min_players ?? 2} players` }, { status: 400 })
   }
 
   // Generate word pair

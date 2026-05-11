@@ -30,6 +30,8 @@ export default function LobbyPage() {
   const [chatInput, setChatInput] = useState('')
   const [sendingChat, setSendingChat] = useState(false)
   const [leaving, setLeaving] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
   const prevPlayerIds = useRef<Set<string>>(new Set())
   const chatEndRef = useRef<HTMLDivElement>(null)
   const chatInputRef = useRef<HTMLInputElement>(null)
@@ -46,18 +48,61 @@ export default function LobbyPage() {
     const playerId = sessionStorage.getItem('playerId')
     if (!playerId) { router.replace(`/join?code=${code}`); return }
     setMyPlayerId(playerId)
+
     async function load() {
-      const { data: roomData } = await supabase.from('rooms').select('*').eq('code', code).single()
-      if (!roomData) { setError('Room not found'); setLoading(false); return }
-      setRoom(roomData)
-      const [{ data: playersData }, { data: messagesData }] = await Promise.all([
-        supabase.from('players').select('*').eq('room_id', roomData.id).order('joined_at'),
-        supabase.from('messages').select('*').eq('room_id', roomData.id).order('created_at').limit(100),
-      ])
-      if (playersData) { setPlayers(playersData); prevPlayerIds.current = new Set(playersData.map((p: Player) => p.id)) }
-      if (messagesData) setMessages(messagesData)
-      setLoading(false)
+      try {
+        const { data: roomData, error: roomErr } = await supabase
+          .from('rooms')
+          .select('*')
+          .eq('code', code)
+          .single()
+
+        if (roomErr || !roomData) {
+          setError('Room not found')
+          setLoading(false)
+          return
+        }
+
+        setRoom(roomData)
+
+        // Fetch players with retry — sometimes Supabase is slow on first load
+        let playersData = null
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const { data } = await supabase
+            .from('players')
+            .select('*')
+            .eq('room_id', roomData.id)
+            .order('joined_at')
+
+          if (data && data.length > 0) {
+            playersData = data
+            break
+          }
+          // Wait 500ms before retry
+          await new Promise(r => setTimeout(r, 500))
+        }
+
+        if (playersData) {
+          setPlayers(playersData)
+          prevPlayerIds.current = new Set(playersData.map((p: Player) => p.id))
+        }
+
+        const { data: messagesData } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('room_id', roomData.id)
+          .order('created_at')
+          .limit(100)
+
+        if (messagesData) setMessages(messagesData)
+      } catch (e) {
+        console.error('Lobby load error:', e)
+        setError('Failed to load lobby')
+      } finally {
+        setLoading(false)
+      }
     }
+
     load()
   }, [code, router])
 
@@ -68,6 +113,8 @@ export default function LobbyPage() {
     const channel = supabase.channel(`lobby:${room.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${room.id}` },
         async () => {
+          // Small delay to ensure write is fully committed before reading
+          await new Promise(r => setTimeout(r, 200))
           const { data } = await supabase.from('players').select('*').eq('room_id', room.id).order('joined_at')
           if (!data) return
           const incoming = new Set(data.map((p: Player) => p.id))
@@ -103,6 +150,18 @@ export default function LobbyPage() {
     channel.track({ playerId: myPlayerId })
     return () => { supabase.removeChannel(channel) }
   }, [room, code, router, myPlayerId])
+
+  async function refreshPlayers() {
+    if (!room) return
+    setRefreshing(true)
+    const { data } = await supabase
+      .from('players')
+      .select('*')
+      .eq('room_id', room.id)
+      .order('joined_at')
+    if (data) setPlayers(data)
+    setRefreshing(false)
+  }
 
   async function toggleReady() {
     if (!myPlayer) return
@@ -254,9 +313,19 @@ export default function LobbyPage() {
 
             {/* Player grid */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>
-                Players · {players.length}/{maxPlayers}
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>
+                  Players · {players.length}/{maxPlayers}
+                </p>
+                <button
+                  onClick={refreshPlayers}
+                  disabled={refreshing}
+                  className="text-xs px-2 py-1 rounded-lg transition-all disabled:opacity-40"
+                  style={{ background: 'var(--bg-2)', color: 'var(--text-3)', border: '1px solid var(--border)' }}
+                >
+                  {refreshing ? '…' : '↻ Refresh'}
+                </button>
+              </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
                 {players.map(p => {
                   const emoji = getPlayerEmoji(p.id)
@@ -454,7 +523,7 @@ function SettingsModal({ room, players, settingsTab, setSettingsTab, updateSetti
   room: Room; players: Player[]; settingsTab: SettingsTab
   setSettingsTab: (t: SettingsTab) => void; updateSetting: (key: string, value: number) => void; onClose: () => void
 }) {
-  const minPlayers = room.min_players ?? 3
+  const minPlayers = room.min_players ?? 2
   const maxPlayers = room.max_players ?? 16
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'game', label: '🎮 Game' },
@@ -524,7 +593,7 @@ function SettingsModal({ room, players, settingsTab, setSettingsTab, updateSetti
           {settingsTab === 'players' && (
             <div className="space-y-4">
               <SettingCard icon="👥" label="Minimum Players" description="Game won't start below this"
-                value={minPlayers} min={3} max={maxPlayers} step={1}
+                value={minPlayers} min={2} max={maxPlayers} step={1}
                 onChange={v => updateSetting('min_players', v)} />
               <SettingCard icon="🎟️" label="Maximum Players" description="Room closes above this"
                 value={maxPlayers} min={minPlayers} max={16} step={1}

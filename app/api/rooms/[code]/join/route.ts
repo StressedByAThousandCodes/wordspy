@@ -28,11 +28,22 @@ export async function POST(
   if (!room) {
     return NextResponse.json({ error: "Room not found" }, { status: 404 });
   }
-  if (room.status !== "lobby") {
-    return NextResponse.json(
-      { error: "Game already in progress" },
-      { status: 400 },
-    );
+
+  if (room.status !== 'lobby') {
+    // Check if this device already has a player in the room
+    const { data: existingPlayer } = await supabase
+      .from('players')
+      .select('id')
+      .eq('room_id', room.id)
+      .eq('device_token', deviceToken)
+      .maybeSingle()
+
+    if (existingPlayer) {
+      // Returning player — let them back in as spectator
+      return NextResponse.json({ playerId: existingPlayer.id, roomId: room.id, rejoining: true })
+    }
+
+    return NextResponse.json({ error: 'Game already in progress' }, { status: 400 })
   }
 
   // Check player count

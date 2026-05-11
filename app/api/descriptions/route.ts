@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'roundId, playerId, and content required' }, { status: 400 })
   }
 
-  // Verify round is in describing phase
+  // Verify round is still in describing phase
   const { data: round } = await supabase
     .from('rounds')
     .select('*')
@@ -38,22 +38,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Check if all alive players have submitted — if so advance phase early
-  const { data: alivePlayers } = await supabase
+  // Count alive players from the room — use room_id from round for accuracy
+  const { data: alivePlayers, count: aliveCount } = await supabase
     .from('players')
-    .select('id')
+    .select('id', { count: 'exact' })
     .eq('room_id', round.room_id)
     .eq('is_alive', true)
 
-  const { data: descriptions } = await supabase
+  // Count submitted descriptions for this round
+  const { count: descCount } = await supabase
     .from('descriptions')
-    .select('id')
+    .select('id', { count: 'exact', head: true })
     .eq('round_id', roundId)
 
+  console.log(`Descriptions: ${descCount}/${aliveCount} alive players submitted`)
+
+  // Only auto-advance if ALL alive players have submitted
+  // Add a buffer — require at least 2 submissions to avoid single-player advance
   if (
-    alivePlayers &&
-    descriptions &&
-    descriptions.length >= alivePlayers.length
+    aliveCount !== null &&
+    descCount !== null &&
+    aliveCount >= 2 &&
+    descCount >= aliveCount
   ) {
     const { data: room } = await supabase
       .from('rooms')
@@ -68,6 +74,9 @@ export async function POST(req: NextRequest) {
         phase_ends_at: getPhaseEndsAt(room?.discuss_seconds ?? 60),
       })
       .eq('id', roundId)
+      .eq('phase', 'describing') // guard against double-advance
+
+    console.log('All players submitted — advanced to discussing')
   }
 
   return NextResponse.json({ ok: true })

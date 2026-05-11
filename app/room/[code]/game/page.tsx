@@ -82,10 +82,14 @@ export default function GamePage() {
 
   // ── Open describe modal when phase starts ─────────────────────
   useEffect(() => {
-    if (round?.phase === "describing" && isAlive && !submitted)
-      setShowDescribeModal(true);
-    else setShowDescribeModal(false);
-  }, [round?.phase, isAlive, submitted]);
+    if (round?.phase === 'describing' && isAlive && !submitted) {
+      // Small delay to ensure player data is loaded before showing modal
+      const t = setTimeout(() => setShowDescribeModal(true), 500)
+      return () => clearTimeout(t)
+    } else {
+      setShowDescribeModal(false)
+    }
+  }, [round?.phase, isAlive, submitted, myPlayerId])
 
   // ── Initial load ──────────────────────────────────────────────
   useEffect(() => {
@@ -364,7 +368,11 @@ export default function GamePage() {
       </div>
     );
 
-  const myWord = myRole === 'spy' ? round.spy_word : round.civilian_word
+  const myWord = myRole === 'spy'
+    ? round.spy_word
+    : myRole === 'civilian'
+    ? round.civilian_word
+    : '...' // loading state while role is being fetched
 
   const phaseDuration = round.created_at
     ? Math.round(
