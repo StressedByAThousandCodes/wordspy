@@ -15,12 +15,23 @@ export async function POST(
 
   const { data: round } = await supabase
     .from('rounds')
-    .select('*, rooms(*)')
+    .select('*')
     .eq('id', params.id)
     .single()
 
   if (!round) {
     return NextResponse.json({ error: 'Round not found' }, { status: 404 })
+  }
+
+  // Fetch room separately to guarantee fresh settings
+  const { data: room } = await supabase
+    .from('rooms')
+    .select('*')
+    .eq('id', round.room_id)
+    .single()
+
+  if (!room) {
+    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
   }
 
   // Guard — only advance if phase_ends_at has actually passed
@@ -29,12 +40,41 @@ export async function POST(
     return NextResponse.json({ skipped: true, reason: 'Timer not expired yet' })
   }
 
-  // Guard — don't advance result phase here (handled by vote API)
+  // Result phase — handle return to lobby or next round
   if (round.phase === 'result') {
-    return NextResponse.json({ skipped: true, reason: 'Result phase handled elsewhere' })
-  }
+    const { data: freshPlayers } = await supabase
+      .from('players')
+      .select('*')
+      .eq('room_id', round.room_id)
+      .eq('is_alive', true)
 
-  const room = round.rooms as any
+    const winner = checkWinCondition(freshPlayers ?? [])
+
+    if (winner) {
+      await supabase.from('rooms').update({ status: 'lobby' }).eq('id', round.room_id)
+      await supabase.from('players')
+        .update({ role: null, is_ready: false, is_alive: true })
+        .eq('room_id', round.room_id)
+      return NextResponse.json({ advanced: true, to: 'lobby', winner })
+    } else {
+      const wordPair = await generateWordPair()
+      const roleMap = assignRoles(freshPlayers ?? [], room.spy_count)
+      await Promise.all(
+        (freshPlayers ?? []).map((p: Player) =>
+          supabase.from('players').update({ role: roleMap.get(p.id), is_alive: true }).eq('id', p.id)
+        )
+      )
+      await supabase.from('rounds').insert({
+        room_id: round.room_id,
+        round_number: round.round_number + 1,
+        civilian_word: wordPair.civilian,
+        spy_word: wordPair.spy,
+        phase: 'describing',
+        phase_ends_at: getPhaseEndsAt(room.describe_seconds),
+      })
+      return NextResponse.json({ advanced: true, to: 'next_round' })
+    }
+  }
 
   if (round.phase === 'describing') {
     await supabase
@@ -44,8 +84,7 @@ export async function POST(
         phase_ends_at: getPhaseEndsAt(room.discuss_seconds),
       })
       .eq('id', round.id)
-      // Only update if still in describing — prevents double-advance
-      .eq('phase', 'describing')
+      .eq('phase', 'describing') // prevents double-advance
 
     return NextResponse.json({ advanced: true, to: 'discussing' })
   }
@@ -64,7 +103,7 @@ export async function POST(
   }
 
   if (round.phase === 'voting') {
-    // Tally whatever votes exist so far
+    // Tally whatever votes exist — if no votes or a tie, nobody is eliminated
     const { data: votes } = await supabase
       .from('votes')
       .select('*')
@@ -72,13 +111,10 @@ export async function POST(
 
     const eliminatedId = tallyVotes(votes ?? [])
     if (eliminatedId) {
-      await supabase
-        .from('players')
-        .update({ is_alive: false })
-        .eq('id', eliminatedId)
+      await supabase.from('players').update({ is_alive: false }).eq('id', eliminatedId)
     }
 
-    // Check win condition
+    // Refetch alive players after potential elimination
     const { data: alivePlayers } = await supabase
       .from('players')
       .select('*')
@@ -87,6 +123,7 @@ export async function POST(
 
     const winner = checkWinCondition(alivePlayers ?? [])
 
+    // Move to result — guard with .eq('phase', 'voting') prevents double-advance
     await supabase
       .from('rounds')
       .update({
@@ -97,14 +134,23 @@ export async function POST(
       .eq('phase', 'voting')
 
     // Schedule post-result transition
+    // Uses setTimeout but the client-side fallback in game/page.tsx
+    // will call this endpoint again when result timer hits zero,
+    // which handles the result phase directly above — no stale closure issues
     setTimeout(async () => {
+      // Re-check phase at execution time — avoids acting on stale state
+      const { data: currentRound } = await supabase
+        .from('rounds')
+        .select('phase')
+        .eq('id', round.id)
+        .single()
+
+      // Only proceed if still in result (not already advanced by client fallback)
+      if (currentRound?.phase !== 'result') return
+
       if (winner) {
-        await supabase
-          .from('rooms')
-          .update({ status: 'lobby' })
-          .eq('id', round.room_id)
-        await supabase
-          .from('players')
+        await supabase.from('rooms').update({ status: 'lobby' }).eq('id', round.room_id)
+        await supabase.from('players')
           .update({ role: null, is_ready: false, is_alive: true })
           .eq('room_id', round.room_id)
       } else {
@@ -119,10 +165,7 @@ export async function POST(
 
         await Promise.all(
           (nextPlayers ?? []).map((p: Player) =>
-            supabase
-              .from('players')
-              .update({ role: roleMap.get(p.id) })
-              .eq('id', p.id)
+            supabase.from('players').update({ role: roleMap.get(p.id), is_alive: true }).eq('id', p.id)
           )
         )
 
@@ -137,7 +180,12 @@ export async function POST(
       }
     }, 10000)
 
-    return NextResponse.json({ advanced: true, to: 'result' })
+    return NextResponse.json({
+      advanced: true,
+      to: 'result',
+      eliminated: eliminatedId ?? null,
+      noVotes: (votes ?? []).length === 0,
+    })
   }
 
   return NextResponse.json({ skipped: true, reason: 'Unknown phase' })

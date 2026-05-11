@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { getOrCreateDeviceToken } from '@/lib/player'
+import { Button, Card, Input, Divider } from '@/components/ui'
+import { ThemeToggle } from '@/components/theme'
 
 export default function HomePage() {
   const router = useRouter()
@@ -14,47 +16,34 @@ export default function HomePage() {
   const [isReturning, setIsReturning] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Check if returning user
   useEffect(() => {
     async function checkReturning() {
-      const deviceToken = getOrCreateDeviceToken()
       try {
+        const deviceToken = getOrCreateDeviceToken()
         const res = await fetch(`/api/users?deviceToken=${deviceToken}`)
         const data = await res.json()
-        if (data.user) {
-          setNickname(data.user.nickname)
-          setIsReturning(true)
-        }
-      } catch (e) {
-        // ignore — new user
-      } finally {
+        if (data.user) { setNickname(data.user.nickname); setIsReturning(true) }
+      } catch { /* new user */ } finally {
         setChecking(false)
-        setTimeout(() => inputRef.current?.focus(), 100)
+        setTimeout(() => inputRef.current?.focus(), 150)
       }
     }
     checkReturning()
   }, [])
 
   async function handleCreate() {
-    if (!nickname.trim()) return setError('Pick a nickname first')
-    setLoading(true)
-    setError('')
+    if (!nickname.trim()) return setError('Enter a nickname first')
+    setLoading(true); setError('')
     try {
       const deviceToken = getOrCreateDeviceToken()
-
-      // Save/verify guest account
       const userRes = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nickname: nickname.trim(), deviceToken }),
       })
       const userData = await userRes.json()
       if (!userRes.ok) throw new Error(userData.error || 'Failed to save account')
-
-      // Create room
       const res = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nickname: nickname.trim(), deviceToken }),
       })
       const data = await res.json()
@@ -63,79 +52,86 @@ export default function HomePage() {
       sessionStorage.setItem('deviceToken', deviceToken)
       sessionStorage.setItem('nickname', nickname.trim())
       router.push(`/room/${data.code}/lobby`)
-    } catch (e: any) {
-      setError(e.message)
-      setLoading(false)
-    }
+    } catch (e: any) { setError(e.message); setLoading(false) }
   }
 
-  return (
-    <main className="relative min-h-screen bg-[#0a0a0f] flex flex-col items-center justify-center overflow-hidden px-5">
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(139,92,246,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(139,92,246,0.03)_1px,transparent_1px)] bg-[size:40px_40px]" />
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-violet-600/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-1/4 left-1/3 w-64 h-64 bg-fuchsia-600/8 rounded-full blur-3xl pointer-events-none" />
+  const rules = [
+    { icon: '📝', step: 'Describe', desc: 'Each player writes one sentence about their word.' },
+    { icon: '💬', step: 'Discuss', desc: 'Read all clues. Who sounds off?' },
+    { icon: '🗳️', step: 'Vote', desc: 'Eliminate the most suspicious player.' },
+    { icon: '🏆', step: 'Win', desc: 'Civilians find all spies. Spies outlast the civilians.' },
+  ]
 
-      <div className="relative z-10 w-full max-w-sm animate-fadeIn">
+  return (
+    <main className="min-h-screen flex flex-col items-center justify-center px-4 py-12">
+
+      {/* Theme toggle top right */}
+      <div className="fixed top-4 right-4 z-10">
+        <ThemeToggle />
+      </div>
+
+      <div className="w-full max-w-xs space-y-6 animate-fadeUp">
 
         {/* Logo */}
-        <div className="text-center mb-10">
-          <div className="relative inline-block mb-4">
-            <div className="text-7xl select-none">🕵️</div>
-            <div className="absolute -top-1 -right-1 w-4 h-4 bg-violet-500 rounded-full animate-ping opacity-75" />
-            <div className="absolute -top-1 -right-1 w-4 h-4 bg-violet-500 rounded-full" />
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl text-2xl mb-1"
+            style={{ background: 'var(--accent-bg)', border: '1px solid var(--accent)' }}>
+            🕵️
           </div>
-          <h1 className="text-4xl font-black tracking-tight text-white mb-2 font-display">
-            Word<span className="text-violet-400">Spy</span>
+          <h1 className="text-2xl font-display font-bold" style={{ color: 'var(--text)' }}>
+            Word<span style={{ color: 'var(--accent)' }}>Spy</span>
           </h1>
-          <p className="text-sm text-zinc-500 leading-relaxed">
-            One traitor. One different word.<br />Find the spy before time runs out.
+          <p className="text-sm" style={{ color: 'var(--text-3)' }}>
+            Find the spy before it&apos;s too late.
           </p>
         </div>
 
-        {/* Returning user greeting */}
+        {/* Returning user banner */}
         {isReturning && !checking && (
-          <div className="mb-4 flex items-center gap-3 bg-violet-500/10 border border-violet-500/20 rounded-2xl px-4 py-3">
-            <span className="text-xl">👋</span>
-            <div>
-              <p className="text-sm font-bold text-violet-300">Welcome back!</p>
-              <p className="text-xs text-zinc-500">Logged in as <span className="text-white font-semibold">{nickname}</span></p>
+          <div className="flex items-center gap-3 rounded-xl px-3.5 py-2.5 animate-fadeIn"
+            style={{ background: 'var(--accent-bg)', border: '1px solid var(--accent)' }}>
+            <span className="text-lg">👋</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold" style={{ color: 'var(--accent-text)' }}>
+                Welcome back, <span className="font-bold">{nickname}</span>
+              </p>
             </div>
-            <button
-              onClick={() => { setIsReturning(false); setNickname(''); setTimeout(() => inputRef.current?.focus(), 100) }}
-              className="ml-auto text-xs text-zinc-600 hover:text-zinc-400 transition"
-            >
+            <button onClick={() => { setIsReturning(false); setNickname(''); setTimeout(() => inputRef.current?.focus(), 100) }}
+              className="text-xs shrink-0 transition-opacity hover:opacity-60"
+              style={{ color: 'var(--accent-text)' }}>
               Change
             </button>
           </div>
         )}
 
-        {/* Card */}
-        <div className="bg-zinc-900/80 backdrop-blur-sm border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4">
+        {/* Main card */}
+        <Card className="p-5 space-y-4">
           {checking ? (
-            <div className="flex items-center justify-center py-6 gap-3">
-              <div className="w-5 h-5 border-2 border-violet-500/30 border-t-violet-500 rounded-full animate-spin" />
-              <span className="text-sm text-zinc-500">Checking your account…</span>
+            <div className="flex items-center justify-center py-6 gap-2.5">
+              <div className="w-4 h-4 border-2 rounded-full animate-spin"
+                style={{ borderColor: 'var(--border-2)', borderTopColor: 'var(--accent)' }} />
+              <span className="text-sm" style={{ color: 'var(--text-3)' }}>Checking your account…</span>
             </div>
           ) : (
             <>
-              {/* Nickname input */}
               {!isReturning && (
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">
-                    Your codename
+                  <label className="text-xs font-semibold uppercase tracking-wider"
+                    style={{ color: 'var(--text-3)' }}>
+                    Nickname
                   </label>
                   <div className="relative">
-                    <input
+                    <Input
                       ref={inputRef}
-                      type="text"
-                      placeholder="Enter nickname…"
+                      placeholder="Enter your codename…"
                       value={nickname}
-                      onChange={e => { setNickname(e.target.value); setError('') }}
+                      onChange={e => { setNickname(e.target.value.slice(0, 20)); setError('') }}
                       onKeyDown={e => e.key === 'Enter' && handleCreate()}
                       maxLength={20}
-                      className="w-full bg-zinc-800/80 border border-zinc-700 text-white placeholder-zinc-600 rounded-2xl px-4 py-3.5 pr-14 text-base focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 transition-all"
+                      className="pr-12"
                     />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-zinc-600 tabular-nums font-mono">
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs tabular-nums"
+                      style={{ color: 'var(--text-3)' }}>
                       {nickname.length}/20
                     </span>
                   </div>
@@ -143,69 +139,59 @@ export default function HomePage() {
               )}
 
               {error && (
-                <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
-                  <span>⚠️</span><span>{error}</span>
-                </div>
+                <p className="text-xs rounded-xl px-3 py-2" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>
+                  {error}
+                </p>
               )}
 
-              <button
+              <Button
+                variant="primary"
+                size="lg"
+                loading={loading}
+                disabled={nickname.trim().length < 2}
                 onClick={handleCreate}
-                disabled={loading || nickname.trim().length < 2}
-                className="w-full py-4 rounded-2xl font-bold text-base text-white transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed relative overflow-hidden group"
-                style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #ec4899 100%)' }}
               >
-                <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-                <span className="relative">
-                  {loading ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Creating room…
-                    </span>
-                  ) : '🚀 Create a Room'}
-                </span>
-              </button>
+                Create a Room
+              </Button>
 
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-zinc-800" />
-                <span className="text-xs text-zinc-600 font-medium">or</span>
-                <div className="flex-1 h-px bg-zinc-800" />
-              </div>
+              <Divider label="or" />
 
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
                 onClick={() => router.push('/join')}
-                className="w-full py-4 rounded-2xl font-bold text-base text-zinc-300 border border-zinc-700 hover:border-violet-500/50 hover:text-white hover:bg-violet-500/5 transition-all duration-200"
               >
-                🔑 Join with a Code
-              </button>
+                Join with a Code
+              </Button>
             </>
+          )}
+        </Card>
+
+        {/* How to play */}
+        <div className="space-y-2">
+          <button
+            onClick={() => setShowRules(!showRules)}
+            className="w-full text-xs font-medium text-center py-1.5 transition-opacity hover:opacity-70"
+            style={{ color: 'var(--text-3)' }}
+          >
+            {showRules ? '▲ Hide rules' : '▼ How to play'}
+          </button>
+
+          {showRules && (
+            <Card className="p-4 space-y-3 animate-fadeUp">
+              {rules.map(r => (
+                <div key={r.step} className="flex items-start gap-3">
+                  <span className="text-base mt-0.5 shrink-0">{r.icon}</span>
+                  <div>
+                    <p className="text-xs font-semibold" style={{ color: 'var(--text)' }}>{r.step}</p>
+                    <p className="text-xs leading-relaxed mt-0.5" style={{ color: 'var(--text-3)' }}>{r.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </Card>
           )}
         </div>
 
-        <button
-          onClick={() => setShowRules(!showRules)}
-          className="w-full mt-4 text-xs text-zinc-600 hover:text-zinc-400 transition text-center py-2"
-        >
-          {showRules ? '▲ Hide rules' : '▼ How to play?'}
-        </button>
-
-        {showRules && (
-          <div className="mt-2 bg-zinc-900/60 border border-zinc-800 rounded-2xl p-4 space-y-2.5 text-sm">
-            {[
-              ['🎯', 'Civilians', 'Find and eliminate the spy.'],
-              ['🕵️', 'The Spy', 'Blend in — your word is slightly different.'],
-              ['📝', 'Describe', 'One sentence about your word. Don\'t say it directly.'],
-              ['💬', 'Discuss', 'Compare clues. Who sounds suspicious?'],
-              ['🗳️', 'Vote', 'Eliminate the most suspicious player each round.'],
-            ].map(([icon, title, desc]) => (
-              <div key={title} className="flex gap-3">
-                <span className="text-base shrink-0">{icon}</span>
-                <p className="text-zinc-400 leading-relaxed">
-                  <span className="text-zinc-200 font-semibold">{title} — </span>{desc}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </main>
   )
