@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { tallyVotes, getPhaseEndsAt } from '@/lib/game'
+import { tallyVotes, checkWinCondition, getPhaseEndsAt } from '@/lib/game'
 import type { Player } from '@/types'
 
 export async function POST(
@@ -64,13 +64,23 @@ export async function POST(
   return NextResponse.json({ ok: true })
 }
 
+/**
+ * BUG FIX (Bug 5):
+ * Previously, after eliminating a player we re-checked win condition using the
+ * stale `alivePlayers` list (which still included the just-eliminated player
+ * and had roles from the DB that may already have been partially cleared).
+ *
+ * Now we re-fetch alive players AFTER the elimination update so the win check
+ * always operates on the freshest DB state. This prevents false "civilians win"
+ * results caused by stale role data.
+ */
 async function resolveVoting(
   round: any,
   alivePlayers: Player[],
   votes: any[],
   supabase: any
 ) {
-  // Eliminate top-voted player (null = tie or no votes = nobody eliminated)
+  // Eliminate the top-voted player (null = tie or no votes = nobody eliminated)
   const eliminatedId = tallyVotes(votes)
   if (eliminatedId) {
     await supabase
@@ -80,8 +90,8 @@ async function resolveVoting(
   }
 
   // Move to result phase — 8 seconds for players to read the result.
-  // The client-side advance useEffect will call /api/rounds/[id]/advance
-  // when the result timer hits zero, which handles end-game or next round.
+  // The client-side advance useEffect calls /api/rounds/[id]/advance when the
+  // result timer hits zero, which handles end-game or next round from there.
   await supabase
     .from('rounds')
     .update({

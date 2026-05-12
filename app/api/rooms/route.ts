@@ -29,7 +29,10 @@ export async function POST(req: NextRequest) {
       host_id: '00000000-0000-0000-0000-000000000000',
       status: 'lobby',
       spy_count: 1,
-      min_players: 2,
+      // BUG FIX: min_players is 3 per game mechanics ("minimum of 3 players to start")
+      // The original code used 2 which allowed 2-player games where the win condition
+      // (spies >= civilians) triggered immediately with no elimination.
+      min_players: 3,
       max_players: 16,
       describe_seconds: 30,
       discuss_seconds: 45,

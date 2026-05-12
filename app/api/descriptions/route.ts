@@ -6,8 +6,8 @@ export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
   const { roundId, playerId, content } = await req.json()
 
-  if (!roundId || !playerId || !content?.trim()) {
-    return NextResponse.json({ error: 'roundId, playerId, and content required' }, { status: 400 })
+  if (!roundId || !playerId) {
+    return NextResponse.json({ error: 'roundId and playerId required' }, { status: 400 })
   }
 
   // Verify round is still in describing phase
@@ -24,24 +24,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Not in describing phase' }, { status: 400 })
   }
 
-  // Insert description — unique constraint prevents duplicates
+  // BUG FIX (Bug 1 — timer submit):
+  // content can be empty string when the timer expires with nothing typed.
+  // We accept empty content (the mechanic says "submit whether finished or not,
+  // even if empty"). We still trim and cap to avoid whitespace-only entries
+  // being treated as meaningful descriptions.
+  const trimmedContent = (content ?? '').trim().slice(0, 200)
+
+  // Insert description — unique constraint prevents duplicates.
+  // An empty description is valid (player ran out of time).
   const { error } = await supabase.from('descriptions').insert({
     round_id: roundId,
     player_id: playerId,
-    content: content.trim().slice(0, 200),
+    content: trimmedContent,
   })
 
   if (error) {
     if (error.code === '23505') {
-      return NextResponse.json({ error: 'Already submitted' }, { status: 409 })
+      // Already submitted — treat as success (idempotent)
+      return NextResponse.json({ ok: true, alreadySubmitted: true })
     }
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Count alive players from the room — use room_id from round for accuracy
-  const { data: alivePlayers, count: aliveCount } = await supabase
+  // Count alive players for this round's room
+  const { count: aliveCount } = await supabase
     .from('players')
-    .select('id', { count: 'exact' })
+    .select('id', { count: 'exact', head: true })
     .eq('room_id', round.room_id)
     .eq('is_alive', true)
 
@@ -53,8 +62,8 @@ export async function POST(req: NextRequest) {
 
   console.log(`Descriptions: ${descCount}/${aliveCount} alive players submitted`)
 
-  // Only auto-advance if ALL alive players have submitted
-  // Add a buffer — require at least 2 submissions to avoid single-player advance
+  // Auto-advance if ALL alive players have submitted (minimum 2 to avoid
+  // single-player edge cases during development)
   if (
     aliveCount !== null &&
     descCount !== null &&

@@ -32,8 +32,15 @@ export async function POST(
     .select("*")
     .eq("room_id", room.id);
 
-  if (!players || players.length < (room.min_players ?? 2)) {
-    return NextResponse.json({ error: `Need at least ${room.min_players ?? 2} players` }, { status: 400 })
+  // BUG FIX: enforce minimum 3 players per game mechanics.
+  // The original used room.min_players ?? 2 which allowed a 2-player start.
+  // We now clamp to at least 3 regardless of what min_players is set to.
+  const effectiveMin = Math.max(room.min_players ?? 3, 3)
+  if (!players || players.length < effectiveMin) {
+    return NextResponse.json(
+      { error: `Need at least ${effectiveMin} players` },
+      { status: 400 },
+    )
   }
 
   // Generate word pair
@@ -52,8 +59,7 @@ export async function POST(
     ),
   );
 
-  // ← ADD THE CLEANUP HERE
-  // Clean up all previous rounds for this room
+  // Clean up all previous rounds for this room (and their child rows)
   const { data: oldRounds } = await supabase
     .from("rounds")
     .select("id")
@@ -87,14 +93,15 @@ export async function POST(
     );
   }
 
-  // Mark room as playing — this triggers Realtime on all clients to navigate to game
+  // Mark room as playing — triggers Realtime on all clients to navigate to game
   await supabase.from("rooms").update({ status: "playing" }).eq("id", room.id);
 
-  console.log("Room settings:", {
+  console.log("Game started. Room settings:", {
     describe: room.describe_seconds,
     discuss: room.discuss_seconds,
     vote: room.vote_seconds,
     spy_count: room.spy_count,
+    players: players.length,
   });
 
   return NextResponse.json({ roundId: round.id });
