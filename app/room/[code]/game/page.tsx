@@ -107,7 +107,7 @@ export default function GamePage() {
     const { data } = await supabase
       .from("players")
       .select(
-        "id, nickname, is_ready, is_alive, room_id, device_token, joined_at, role",
+        "id, nickname, is_ready, is_alive, room_id, device_token, joined_at",
       )
       .eq("room_id", roomId)
       .order("joined_at");
@@ -260,20 +260,30 @@ export default function GamePage() {
   // ── Phase advance (timer expired) ─────────────────────────────────────────
   useEffect(() => {
     if (secondsLeft !== 0 || !round || hasAdvanced.current) return;
-    if (round.phase === "result") {
-      /* ... existing ... */ return;
-    }
 
     hasAdvanced.current = true;
 
-    // For describing phase, wait 1s for in-flight description submissions to land
     const delay = round.phase === "describing" ? 1000 : 0;
     setTimeout(() => {
       fetch(`/api/rounds/${round.id}/advance`, { method: "POST" }).catch(() => {
         hasAdvanced.current = false;
       });
     }, delay);
-  }, [secondsLeft, round?.id, round?.phase]); // eslint-disable-line
+  }, [secondsLeft, round?.id, round?.phase]);
+
+  useEffect(() => {
+    if (secondsLeft !== 0 || !round) return;
+    // result phase is now included — retry is safe because the advance endpoint
+    // is idempotent (phase guard on every UPDATE prevents double-advance)
+    const retryTimer = setTimeout(() => {
+      fetch(`/api/rounds/${round.id}/advance`, { method: "POST" })
+        .then((r) => r.json())
+        .then((d) => console.log("Retry advance result:", d))
+        .catch((e) => console.error("Retry advance failed:", e));
+    }, 3000);
+
+    return () => clearTimeout(retryTimer);
+  }, [secondsLeft, round?.id, round?.phase]);
 
   // ── Safety net retry (3s after timer expires) ─────────────────────────────
   useEffect(() => {
@@ -317,9 +327,19 @@ export default function GamePage() {
           filter: `room_id=eq.${room.id}`,
         },
         async (payload) => {
-          const newRound = payload.new as Round;
-          setRound(newRound);
-          roundRef.current = newRound;
+          // Fetch a sanitized version (server strips words):
+          const { data: freshRound } = await supabase
+            .from("rounds")
+            .select(
+              "id, room_id, round_number, phase, phase_ends_at, created_at",
+            ) // no words!
+            .eq("id", (payload.new as Round).id)
+            .single();
+          if (freshRound) {
+            setRound(freshRound as Round);
+          }
+
+          roundRef.current = freshRound as Round;
 
           // Reset per-round state
           setSubmitted(false);
@@ -328,7 +348,7 @@ export default function GamePage() {
           setVotes([]);
           setDescriptions([]);
 
-          await loadRoundData(newRound.id);
+          await loadRoundData(freshRound?.id);
 
           // BUG FIX (Bug 2): Re-fetch players on every round change so the
           // player list stays consistent (roles, is_alive) without relying on
@@ -337,7 +357,7 @@ export default function GamePage() {
 
           // Snapshot players with roles intact before any advance can clear them
           const snapshot = await fetchPlayers(room.id);
-          if (newRound.phase === "result") {
+          if (freshRound?.phase === "result") {
             setEliminatedRoleReveal(snapshot);
           }
 
@@ -345,12 +365,12 @@ export default function GamePage() {
           // We set myRoleRoundId atomically with myRole so the modal guard
           // (myRoleRoundId === round.id) only passes once both are correct.
           const storedPlayerId = myPlayerIdRef.current;
-          if (storedPlayerId && newRound.phase === "describing") {
+          if (storedPlayerId && freshRound?.phase === "describing") {
             setMyRole(null); // clear stale role first
             setMyRoleRoundId(null); // this blocks the modal from opening
-            const role = await fetchMyRole(newRound.id, storedPlayerId);
+            const role = await fetchMyRole(freshRound?.id, storedPlayerId);
             setMyRole(role);
-            setMyRoleRoundId(newRound.id); // now the modal can open
+            setMyRoleRoundId(freshRound?.id); // now the modal can open
           } else {
             setMyRole(null);
             setMyRoleRoundId(null);

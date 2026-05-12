@@ -97,7 +97,7 @@ export async function POST(
         .from("players")
         .update({ role: null, is_ready: false, is_alive: true })
         .eq("room_id", round.room_id);
-      return NextResponse.json({ advanced: true, to: "lobby", winner });
+      return NextResponse.json({ advanced: true, to: "lobby" });
     } else {
       // Game continues — start a new round with the SAME word pair.
       // Reassign roles so spy identity can shift each round.
