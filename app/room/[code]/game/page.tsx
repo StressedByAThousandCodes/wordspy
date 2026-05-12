@@ -6,7 +6,14 @@ import { supabase } from "@/lib/supabase";
 import { getPlayerEmoji, getPlayerColor } from "@/lib/player";
 import { Card, Badge, Spinner } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme";
-import type { Round, Player, Description, Vote, Room } from "@/types";
+import type {
+  Round,
+  Player,
+  Description,
+  Vote,
+  Room,
+  ChatMessage,
+} from "@/types";
 
 export default function GamePage() {
   const router = useRouter();
@@ -30,12 +37,24 @@ export default function GamePage() {
   // belongs to and can invalidate it when the round changes.
   const [myRole, setMyRole] = useState<string | null>(null);
   const [myRoleRoundId, setMyRoleRoundId] = useState<string | null>(null);
+  const [gameMessages, setGameMessages] = useState<ChatMessage[]>([]);
+  const [gameChatInput, setGameChatInput] = useState("");
+  const [phaseStartedAt, setPhaseStartedAt] = useState<number>(Date.now());
+  // Add to GamePage state:
+  const [lastWinner, setLastWinner] = useState<"civilians" | "spies" | null>(
+    null,
+  );
+  const [eliminatedRoleReveal, setEliminatedRoleReveal] = useState<Player[]>(
+    [],
+  );
 
   // Refs used inside callbacks/timers to always see the latest values
   const roundRef = useRef<Round | null>(null);
   const hasAdvanced = useRef(false);
   const lastPhase = useRef<string | null>(null);
   const myPlayerIdRef = useRef<string | null>(null);
+  const gameChatEndRef = useRef<HTMLDivElement>(null);
+  const pendingDescriptionSubmit = useRef(false);
 
   const myPlayer = players.find((p) => p.id === myPlayerId);
   const alivePlayers = players.filter((p) => p.is_alive);
@@ -68,7 +87,9 @@ export default function GamePage() {
    */
   const fetchMyRole = useCallback(async (roundId: string, playerId: string) => {
     try {
-      const res = await fetch(`/api/rounds/${roundId}/my-role?playerId=${playerId}`);
+      const res = await fetch(
+        `/api/rounds/${roundId}/my-role?playerId=${playerId}`,
+      );
       if (!res.ok) return null;
       const data = await res.json();
       return data.role ?? null;
@@ -85,7 +106,9 @@ export default function GamePage() {
   const fetchPlayers = useCallback(async (roomId: string) => {
     const { data } = await supabase
       .from("players")
-      .select("id, nickname, is_ready, is_alive, room_id, device_token, joined_at, role")
+      .select(
+        "id, nickname, is_ready, is_alive, room_id, device_token, joined_at, role",
+      )
       .eq("room_id", roomId)
       .order("joined_at");
     if (data) setPlayers(data);
@@ -110,9 +133,9 @@ export default function GamePage() {
         Math.max(
           0,
           Math.round(
-            (new Date(round!.phase_ends_at).getTime() - Date.now()) / 1000
-          )
-        )
+            (new Date(round!.phase_ends_at).getTime() - Date.now()) / 1000,
+          ),
+        ),
       );
     }
     tick();
@@ -146,29 +169,30 @@ export default function GamePage() {
     }
   }, [round?.phase, round?.id, isAlive, submitted, myRole, myRoleRoundId]);
 
-  // ── BUG FIX (Bug 1): Auto-submit description when describing timer expires ──
-  // Per game mechanics: "submit whether finished or not, even if empty"
+  // In the description auto-submit effect:
   useEffect(() => {
-    if (secondsLeft !== 0) return;
-    if (round?.phase !== "describing") return;
-    if (submitted) return;
-    if (!myPlayerId || !round) return;
-    if (!isAlive) return;
-
-    // Timer ran out — submit whatever is in the box (even empty)
+    if (
+      secondsLeft !== 0 ||
+      round?.phase !== "describing" ||
+      submitted ||
+      !isAlive
+    )
+      return;
+    pendingDescriptionSubmit.current = true;
     setSubmitted(true);
     setShowDescribeModal(false);
     fetch("/api/descriptions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        roundId: round.id,
+        roundId: round!.id,
         playerId: myPlayerId,
-        content: myDescription, // may be empty string — server accepts it
+        content: myDescription,
       }),
-    }).catch(() => setSubmitted(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secondsLeft]);
+    }).finally(() => {
+      pendingDescriptionSubmit.current = false;
+    });
+  }, [secondsLeft]); // eslint-disable-line
 
   // ── Initial load ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -179,6 +203,9 @@ export default function GamePage() {
     }
     setMyPlayerId(playerId);
     myPlayerIdRef.current = playerId;
+
+    // In the Realtime rounds handler and initial load, set:
+    setPhaseStartedAt(Date.now());
 
     async function load() {
       const { data: roomData } = await supabase
@@ -215,52 +242,38 @@ export default function GamePage() {
           setMyRoleRoundId(roundData.id);
         }
       }
+
+      const { data: msgs } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("room_id", roomData.id)
+        .order("created_at")
+        .limit(200);
+      if (msgs) setGameMessages(msgs);
+
       setLoading(false);
     }
     load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, router]);
 
   // ── Phase advance (timer expired) ─────────────────────────────────────────
   useEffect(() => {
-    if (secondsLeft !== 0) return;
-    if (!round) return;
-    if (hasAdvanced.current) return;
+    if (secondsLeft !== 0 || !round || hasAdvanced.current) return;
+    if (round.phase === "result") {
+      /* ... existing ... */ return;
+    }
 
     hasAdvanced.current = true;
 
-    if (round.phase === "result") {
-      // Small delay so all clients can read the result screen
-      setTimeout(async () => {
-        const { data: roomData } = await supabase
-          .from("rooms")
-          .select("status")
-          .eq("code", code)
-          .single();
-        if (roomData?.status === "lobby") {
-          router.push(`/room/${code}/lobby`);
-        } else {
-          fetch(`/api/rounds/${round.id}/advance`, { method: "POST" })
-            .then((r) => r.json())
-            .then((d) => console.log("Result advance:", d))
-            .catch((e) => console.error("Result advance failed:", e));
-        }
-      }, 1500);
-      return;
-    }
-
-    // For describing/discussing/voting — every player attempts advance;
-    // the server .eq('phase', ...) guard prevents double-advancing.
-    console.log("Timer expired, advancing phase:", round.phase);
-    fetch(`/api/rounds/${round.id}/advance`, { method: "POST" })
-      .then((r) => r.json())
-      .then((d) => console.log("Advance result:", d))
-      .catch((e) => {
-        console.error("Advance failed:", e);
-        hasAdvanced.current = false; // allow retry
+    // For describing phase, wait 1s for in-flight description submissions to land
+    const delay = round.phase === "describing" ? 1000 : 0;
+    setTimeout(() => {
+      fetch(`/api/rounds/${round.id}/advance`, { method: "POST" }).catch(() => {
+        hasAdvanced.current = false;
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secondsLeft, round?.id, round?.phase]);
+    }, delay);
+  }, [secondsLeft, round?.id, round?.phase]); // eslint-disable-line
 
   // ── Safety net retry (3s after timer expires) ─────────────────────────────
   useEffect(() => {
@@ -276,7 +289,7 @@ export default function GamePage() {
     }, 3000);
 
     return () => clearTimeout(retryTimer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [secondsLeft, round?.id, round?.phase]);
 
   // ── Realtime subscriptions ────────────────────────────────────────────────
@@ -322,13 +335,19 @@ export default function GamePage() {
           // a separate players-table event that might arrive out of order.
           await fetchPlayers(room.id);
 
+          // Snapshot players with roles intact before any advance can clear them
+          const snapshot = await fetchPlayers(room.id);
+          if (newRound.phase === "result") {
+            setEliminatedRoleReveal(snapshot);
+          }
+
           // BUG FIX (Bug 1): Fetch role BEFORE the modal useEffect can fire.
           // We set myRoleRoundId atomically with myRole so the modal guard
           // (myRoleRoundId === round.id) only passes once both are correct.
           const storedPlayerId = myPlayerIdRef.current;
           if (storedPlayerId && newRound.phase === "describing") {
-            setMyRole(null);          // clear stale role first
-            setMyRoleRoundId(null);   // this blocks the modal from opening
+            setMyRole(null); // clear stale role first
+            setMyRoleRoundId(null); // this blocks the modal from opening
             const role = await fetchMyRole(newRound.id, storedPlayerId);
             setMyRole(role);
             setMyRoleRoundId(newRound.id); // now the modal can open
@@ -336,7 +355,7 @@ export default function GamePage() {
             setMyRole(null);
             setMyRoleRoundId(null);
           }
-        }
+        },
       )
       // ── Players changes ──────────────────────────────────────────────────
       .on(
@@ -349,7 +368,7 @@ export default function GamePage() {
         },
         async () => {
           await fetchPlayers(room.id);
-        }
+        },
       )
       // ── Descriptions inserts ─────────────────────────────────────────────
       .on(
@@ -357,7 +376,7 @@ export default function GamePage() {
         { event: "INSERT", schema: "public", table: "descriptions" },
         async () => {
           if (roundRef.current) await loadRoundData(roundRef.current.id);
-        }
+        },
       )
       // ── Votes inserts / updates ──────────────────────────────────────────
       .on(
@@ -365,7 +384,7 @@ export default function GamePage() {
         { event: "*", schema: "public", table: "votes" },
         async () => {
           if (roundRef.current) await loadRoundData(roundRef.current.id);
-        }
+        },
       )
       // ── Room status changes ──────────────────────────────────────────────
       .on(
@@ -388,8 +407,20 @@ export default function GamePage() {
           if (updated.status === "lobby") {
             router.push(`/room/${code}/lobby`);
           }
-        }
+        },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `room_id=eq.${room.id}`,
+        },
+        (payload) =>
+          setGameMessages((prev) => [...prev, payload.new as ChatMessage]),
+      )
+
       .subscribe();
 
     return () => {
@@ -435,6 +466,17 @@ export default function GamePage() {
       .catch((e) => console.error("Skip failed:", e));
   }
 
+  async function sendGameMessage() {
+    if (!gameChatInput.trim() || !myPlayerId || !room) return;
+    const content = gameChatInput.trim();
+    setGameChatInput("");
+    await fetch("/api/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId: room.id, playerId: myPlayerId, content }),
+    });
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
   if (loading || !round)
     return (
@@ -454,17 +496,19 @@ export default function GamePage() {
   const myWord = !roleReady
     ? "…"
     : myRole === "spy"
-    ? round.spy_word
-    : round.civilian_word;
+      ? round.spy_word
+      : round.civilian_word;
 
-  const phaseDuration =
-    round.created_at
-      ? Math.round(
-          (new Date(round.phase_ends_at).getTime() -
-            new Date(round.created_at).getTime()) /
-            1000
-        )
-      : 30;
+  // Then compute duration as:
+  const phaseDurations: Record<string, number> = {
+    describing: room?.describe_seconds ?? 30,
+    discussing: room?.discuss_seconds ?? 45,
+    voting: room?.vote_seconds ?? 30,
+    result: 8,
+  };
+
+  const phaseDuration = phaseDurations[round.phase] ?? 30;
+
   const timerPct = Math.min(100, (secondsLeft / phaseDuration) * 100);
   const isUrgent = secondsLeft <= 10 && secondsLeft > 0;
 
@@ -593,7 +637,7 @@ export default function GamePage() {
                   const emoji = getPlayerEmoji(p.id);
                   const color = getPlayerColor(p.id);
                   const hasSubmitted = descriptions.some(
-                    (d) => d.player_id === p.id
+                    (d) => d.player_id === p.id,
                   );
                   const isMe = p.id === myPlayerId;
                   return (
@@ -608,11 +652,11 @@ export default function GamePage() {
                               background: "var(--bg-2)",
                             }
                           : isMe
-                          ? {
-                              borderColor: "var(--accent)",
-                              background: "var(--accent-bg)",
-                            }
-                          : {}
+                            ? {
+                                borderColor: "var(--accent)",
+                                background: "var(--accent-bg)",
+                              }
+                            : {}
                       }
                     >
                       <div
@@ -679,8 +723,8 @@ export default function GamePage() {
                       isEliminated
                         ? { opacity: 0.45, background: "var(--bg-2)" }
                         : isMe
-                        ? { borderColor: "var(--accent)" }
-                        : {}
+                          ? { borderColor: "var(--accent)" }
+                          : {}
                     }
                   >
                     <div className="flex items-center gap-2.5">
@@ -722,13 +766,95 @@ export default function GamePage() {
                         color: desc ? "var(--text)" : "var(--text-3)",
                       }}
                     >
-                      {desc?.content
-                        ? desc.content
-                        : <em>No description submitted</em>}
+                      {desc?.content ? (
+                        desc.content
+                      ) : (
+                        <em>No description submitted</em>
+                      )}
                     </p>
                   </Card>
                 );
               })}
+            </div>
+            {/* ADD: in-game chat */}
+            <div className="space-y-2">
+              <p
+                className="text-xs font-semibold uppercase tracking-wider"
+                style={{ color: "var(--text-3)" }}
+              >
+                Discuss
+              </p>
+              <div
+                className="rounded-2xl overflow-hidden"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--card)",
+                }}
+              >
+                <div className="overflow-y-auto px-3 py-3 space-y-2 h-48">
+                  {gameMessages.map((msg) => {
+                    const sender = players.find((p) => p.id === msg.player_id);
+                    const isMe = msg.player_id === myPlayerId;
+                    return (
+                      <div
+                        key={msg.id}
+                        className={`flex items-end gap-2 ${isMe ? "flex-row-reverse" : ""}`}
+                      >
+                        <div
+                          className="px-3 py-2 rounded-2xl text-xs leading-relaxed"
+                          style={
+                            isMe
+                              ? { background: "var(--accent)", color: "white" }
+                              : {
+                                  background: "var(--bg-2)",
+                                  color: "var(--text)",
+                                  border: "1px solid var(--border)",
+                                }
+                          }
+                        >
+                          {!isMe && (
+                            <span className="block font-semibold mb-0.5">
+                              {sender?.nickname}
+                            </span>
+                          )}
+                          {msg.content}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div ref={gameChatEndRef} />
+                </div>
+                <div
+                  className="border-t px-3 py-2 flex gap-2"
+                  style={{
+                    borderColor: "var(--border)",
+                    background: "var(--bg-2)",
+                  }}
+                >
+                  <input
+                    placeholder="Say something…"
+                    value={gameChatInput}
+                    onChange={(e) => setGameChatInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") sendGameMessage();
+                    }}
+                    maxLength={200}
+                    className="flex-1 rounded-xl px-3 py-2 text-xs outline-none"
+                    style={{
+                      background: "var(--bg)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text)",
+                    }}
+                  />
+                  <button
+                    onClick={sendGameMessage}
+                    className="w-8 h-8 rounded-xl flex items-center justify-center text-white text-sm"
+                    style={{ background: "var(--accent)" }}
+                  >
+                    ↑
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -757,10 +883,10 @@ export default function GamePage() {
                   const emoji = getPlayerEmoji(p.id);
                   const color = getPlayerColor(p.id);
                   const voteCount = votes.filter(
-                    (v) => v.target_id === p.id
+                    (v) => v.target_id === p.id,
                   ).length;
                   const iVotedFor = !!votes.find(
-                    (v) => v.voter_id === myPlayerId && v.target_id === p.id
+                    (v) => v.voter_id === myPlayerId && v.target_id === p.id,
                   );
                   return (
                     <button
@@ -839,7 +965,7 @@ export default function GamePage() {
             </p>
 
             {/* BUG FIX (mechanics): No consensus — skip to next round */}
-            {isAlive && !voted && (
+            {/* {isAlive && !voted && (
               <button
                 onClick={skipRound}
                 className="w-full py-2.5 rounded-xl text-xs font-semibold transition-all hover:opacity-80"
@@ -851,14 +977,16 @@ export default function GamePage() {
               >
                 🤷 No consensus — skip this round
               </button>
-            )}
+            )} */}
           </div>
         )}
 
         {/* ── Result phase ── */}
         {round.phase === "result" && (
           <ResultPhase
-            players={players}
+            players={
+              eliminatedRoleReveal.length > 0 ? eliminatedRoleReveal : players
+            }
             round={round}
             eliminatedPlayerId={eliminatedPlayerId}
           />
@@ -1094,8 +1222,7 @@ function ResultPhase({
                 <span
                   className="text-xs font-semibold"
                   style={{
-                    color:
-                      p.role === "spy" ? "var(--danger)" : "var(--text-3)",
+                    color: p.role === "spy" ? "var(--danger)" : "var(--text-3)",
                   }}
                 >
                   {p.role === "spy" ? "🕵️ Spy" : "👤 Civilian"}
