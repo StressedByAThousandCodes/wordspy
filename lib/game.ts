@@ -35,7 +35,6 @@ export function tallyVotes(votes: Vote[]): string | null {
       maxVotes = count
       eliminated = playerId
     } else if (count === maxVotes) {
-      // Tie — nobody eliminated
       eliminated = null
     }
   }
@@ -43,19 +42,10 @@ export function tallyVotes(votes: Vote[]): string | null {
 }
 
 /**
- * BUG FIX (Bug 5):
- * Original condition `spies.length >= civilians.length` caused the game to end
- * immediately in a 2-player game (1 spy + 1 civilian) even when no one was
- * eliminated — because 1 >= 1 is true.
- *
- * Per the game rules, the game should only end if:
- *   - All spies are voted out → civilians win
- *   - Spies OUTNUMBER the remaining civilians → spies win
- *     (strictly greater than, not equal — equal means the game continues)
- *
- * Using `spies.length > civilians.length` (strict greater-than) means that
- * with 1 spy and 1 civilian remaining the game continues to the next round,
- * which matches the stated mechanic: "game ends if all agents voted out."
+ * Win conditions:
+ * - All spies are eliminated → civilians win
+ * - Spies equal OR outnumber remaining civilians → spies win
+ *   (>= means: 1 spy vs 1 civilian = spies win, game cannot continue fairly)
  */
 export function checkWinCondition(
   alivePlayers: Player[]
@@ -63,11 +53,10 @@ export function checkWinCondition(
   const spies = alivePlayers.filter(p => p.role === 'spy')
   const civilians = alivePlayers.filter(p => p.role === 'civilian')
 
-  // All spies eliminated → civilians win
   if (spies.length === 0) return 'civilians'
 
-  // Spies strictly outnumber remaining civilians → spies win
-  if (spies.length > civilians.length) return 'spies'
+  // FIX: >= so that 1 spy vs 1 civilian ends the game (spies win)
+  if (spies.length >= civilians.length) return 'spies'
 
   return null
 }
