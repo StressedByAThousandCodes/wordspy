@@ -30,11 +30,12 @@ export async function POST(req: NextRequest) {
 
   const cleanNickname = nickname.trim()
 
-  // Check if nickname is taken by a DIFFERENT device
+  // FIX: case-insensitive duplicate check using ilike (SQL ILIKE = case-insensitive LIKE)
+  // This treats "King", "king", "KING" as the same nickname
   const { data: existing } = await supabase
     .from('users')
     .select('*')
-    .eq('nickname', cleanNickname)
+    .ilike('nickname', cleanNickname)  // case-insensitive match
     .maybeSingle()
 
   if (existing && existing.device_token !== deviceToken) {
@@ -44,7 +45,9 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // Upsert — create or update returning user
+  // Upsert — create or update returning user.
+  // If the same device is updating their nickname casing (e.g. "king" → "King"),
+  // we allow it and store the new casing.
   const { data: user, error } = await supabase
     .from('users')
     .upsert(
