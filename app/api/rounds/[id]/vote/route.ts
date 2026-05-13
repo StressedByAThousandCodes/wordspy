@@ -31,7 +31,6 @@ export async function POST(
     return NextResponse.json({ error: "Not in voting phase" }, { status: 400 });
   }
 
-  // After the round check, add:
   const { data: voter } = await supabase
     .from("players")
     .select("is_alive")
@@ -78,23 +77,20 @@ export async function POST(
   return NextResponse.json({ ok: true });
 }
 
-/**
- * BUG FIX (Bug 5):
- * Previously, after eliminating a player we re-checked win condition using the
- * stale `alivePlayers` list (which still included the just-eliminated player
- * and had roles from the DB that may already have been partially cleared).
- *
- * Now we re-fetch alive players AFTER the elimination update so the win check
- * always operates on the freshest DB state. This prevents false "civilians win"
- * results caused by stale role data.
- */
 async function resolveVoting(
   round: any,
   alivePlayers: Player[],
   votes: any[],
   supabase: any,
 ) {
-  // Eliminate the top-voted player (null = tie or no votes = nobody eliminated)
+  // Guard: only advance if still in voting phase
+  const { data: freshRound } = await supabase
+    .from("rounds")
+    .select("phase")
+    .eq("id", round.id)
+    .single();
+  if (freshRound?.phase !== "voting") return;
+
   const eliminatedId = tallyVotes(votes);
   if (eliminatedId) {
     await supabase
@@ -103,13 +99,15 @@ async function resolveVoting(
       .eq("id", eliminatedId);
   }
 
-  // Re-fetch round phase before acting
-  const { data: freshRound } = await supabase
-    .from("rounds")
-    .select("phase")
-    .eq("id", round.id)
-    .single();
-  if (freshRound?.phase !== "voting") return; // already advanced
+  // FIX Bug 3: re-fetch alive players AFTER elimination so win condition
+  // uses the freshest data, not the pre-elimination snapshot
+  const { data: aliveAfterElim } = await supabase
+    .from("players")
+    .select("id, role, is_alive, room_id, nickname, device_token, is_ready, joined_at")
+    .eq("room_id", round.room_id)
+    .eq("is_alive", true);
+
+  const winner = checkWinCondition(aliveAfterElim ?? []);
 
   const { error: phaseErr } = await supabase
     .from("rounds")
@@ -118,9 +116,13 @@ async function resolveVoting(
       phase_ends_at: getPhaseEndsAt(8),
     })
     .eq("id", round.id)
-    .eq("phase", "voting"); // ← ADD THIS GUARD
+    .eq("phase", "voting");
 
-  // Only eliminate if the phase update actually succeeded (rowCount > 0)
-  // Supabase JS v2 doesn't return count by default, so use select to confirm:
-  if (phaseErr) return; // another caller already advanced
+  if (phaseErr) return;
+
+  // If game is already decided, immediately end after showing result
+  if (winner) {
+    // Give players 8s to see the result, then the advance endpoint will
+    // handle returning to lobby when the result timer expires
+  }
 }
