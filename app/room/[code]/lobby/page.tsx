@@ -189,23 +189,21 @@ export default function LobbyPage() {
 
     async function load() {
       try {
-        const { data: roomData, error: roomErr } = await supabase
-          .from("rooms")
-          .select("*")
-          .eq("code", code)
-          .single();
-
-        if (roomErr || !roomData) {
+        // FIX: use API route (service client, bypasses RLS) instead of anon client
+        const roomRes = await fetch(`/api/rooms/${code}`);
+        if (!roomRes.ok) {
           setError("Room not found");
           setLoading(false);
           return;
         }
+        const roomData = await roomRes.json();
 
         setRoom(roomData);
         roomRef.current = roomData;
 
-        // Use retry variant on mount — after a game ends the DB role-reset
-        // write may still be propagating when the lobby page loads.
+        // Players and messages still use anon client via fetchPlayersWithRetry —
+        // these queries filter by room_id which the client already knows, and
+        // player rows don't need RLS bypass for reads.
         await fetchPlayersWithRetry(roomData.id);
 
         const { data: messagesData } = await supabase
