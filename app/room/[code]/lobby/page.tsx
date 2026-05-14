@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getPlayerEmoji, getPlayerColor } from "@/lib/player";
 import { Button, Card, Badge, Spinner } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme";
+import { useBeaconLeave } from "@/hooks/useBeaconLeave";
 import type { Player, Room, ChatMessage } from "@/types";
 
 type SettingsTab = "game" | "players" | "timers";
@@ -38,6 +39,9 @@ export default function LobbyPage() {
   const roomRef = useRef<Room | null>(null);
   const myPlayerIdRef = useRef<string | null>(null);
 
+  // FIX: register beacon so tab-close / hard-refresh removes the player
+  useBeaconLeave(myPlayerId);
+
   const myPlayer = players.find((p) => p.id === myPlayerId);
   const isHost = room?.host_id === myPlayerId;
   const readyCount = players.filter((p) => p.is_ready).length;
@@ -47,12 +51,6 @@ export default function LobbyPage() {
   const readyPct =
     players.length > 0 ? Math.round((readyCount / players.length) * 100) : 0;
 
-  /**
-   * Core player fetch — always writes whatever the DB returns to state.
-   * Used by Realtime handlers and manual refresh where players definitely
-   * exist; we never want to silently skip setPlayers here.
-   */
-  // Replace the fetchPlayers useCallback with a never-blank version:
   const fetchPlayers = useCallback(
     async (roomId: string): Promise<Player[]> => {
       const { data } = await supabase
@@ -63,10 +61,6 @@ export default function LobbyPage() {
 
       const rows = (data ?? []) as Player[];
 
-      // SAFETY: never wipe an existing player list with an empty response.
-      // An empty result almost always means a transient read-after-write lag —
-      // the DB wrote the room update but the players table read hasn't caught up.
-      // The Realtime players event will fire again shortly with the real state.
       if (rows.length === 0) {
         console.warn(
           "fetchPlayers returned 0 rows — skipping setPlayers to avoid flash",
@@ -74,7 +68,6 @@ export default function LobbyPage() {
         return [];
       }
 
-      // Track new arrivals for join animation
       const incoming = new Set(rows.map((p: Player) => p.id));
       const brand = new Set(
         [...incoming].filter((id) => !prevPlayerIds.current.has(id)),
@@ -84,7 +77,6 @@ export default function LobbyPage() {
         setTimeout(() => setNewPlayerIds(new Set()), 1000);
       }
       prevPlayerIds.current = incoming;
-
       setPlayers(rows);
 
       try {
@@ -98,19 +90,8 @@ export default function LobbyPage() {
     [],
   );
 
-  /**
-   * Initial-load variant: retries with exponential backoff because after a
-   * game ends the DB role-reset write may still be propagating when the lobby
-   * page mounts. Only used inside the load() function on mount.
-   *
-   * Workaround 1 (read side): hydrates from sessionStorage immediately so the
-   * UI never flashes empty on reload while the async fetch is in-flight.
-   * Workaround 2: never returns silently empty — always calls setPlayers with
-   * whatever the last attempt returned so a stale cache is never the only data.
-   */
   const fetchPlayersWithRetry = useCallback(
     async (roomId: string): Promise<Player[]> => {
-      // Immediately show cached players so the list is never blank on reload
       try {
         const cached = sessionStorage.getItem(`lobby_players_${roomId}`);
         if (cached) {
@@ -121,11 +102,10 @@ export default function LobbyPage() {
           }
         }
       } catch {
-        /* bad JSON or quota — ignore */
+        /* bad JSON */
       }
 
       let lastRows: Player[] = [];
-
       for (let attempt = 0; attempt < 5; attempt++) {
         const { data } = await supabase
           .from("players")
@@ -134,7 +114,6 @@ export default function LobbyPage() {
           .order("joined_at");
 
         lastRows = (data ?? []) as Player[];
-
         if (lastRows.length > 0) {
           const incoming = new Set(lastRows.map((p: Player) => p.id));
           prevPlayerIds.current = incoming;
@@ -149,17 +128,12 @@ export default function LobbyPage() {
           }
           return lastRows;
         }
-
         if (attempt < 4) {
-          // Exponential backoff: 300 -> 600 -> 1200 -> 2400 ms
           await new Promise((r) => setTimeout(r, 300 * Math.pow(2, attempt)));
         }
       }
 
-      // All retries exhausted — apply whatever came back (may genuinely be empty
-      // if the room has no players, but we never silently discard the cache).
       if (lastRows.length === 0) {
-        // Re-apply cache rather than wiping what the user can already see
         try {
           const cached = sessionStorage.getItem(`lobby_players_${roomId}`);
           if (cached) {
@@ -189,7 +163,7 @@ export default function LobbyPage() {
 
     async function load() {
       try {
-        // FIX: use API route (service client, bypasses RLS) instead of anon client
+        // Use API route (service client) to bypass RLS
         const roomRes = await fetch(`/api/rooms/${code}`);
         if (!roomRes.ok) {
           setError("Room not found");
@@ -197,13 +171,26 @@ export default function LobbyPage() {
           return;
         }
         const roomData = await roomRes.json();
-
         setRoom(roomData);
         roomRef.current = roomData;
 
-        // Players and messages still use anon client via fetchPlayersWithRetry —
-        // these queries filter by room_id which the client already knows, and
-        // player rows don't need RLS bypass for reads.
+        // FIX: verify this player still exists — beacon may have deleted
+        // them if they closed the tab and reopened it in a new session
+        const { data: selfCheck } = await supabase
+          .from("players")
+          .select("id")
+          .eq("id", playerId)
+          .maybeSingle();
+
+        if (!selfCheck) {
+          // Stale session — player was removed. Send them back to join.
+          sessionStorage.removeItem("playerId");
+          sessionStorage.removeItem("deviceToken");
+          sessionStorage.removeItem("nickname");
+          router.replace(`/join?code=${code}`);
+          return;
+        }
+
         await fetchPlayersWithRetry(roomData.id);
 
         const { data: messagesData } = await supabase
@@ -223,26 +210,18 @@ export default function LobbyPage() {
     }
 
     load();
-  }, [code, router, fetchPlayers, fetchPlayersWithRetry]);
+  }, [code, router, fetchPlayersWithRetry]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
-    // We depend on room?.id (not the full room object) so the subscription is
-    // set up once when the room ID is first known and never torn down by
-    // settings-only updates (which change room fields but never the ID).
-    // Previously this used roomRef.current?.id which evaluates to undefined on
-    // first render (before load() completes) — React never saw it change from
-    // undefined to the real ID because ref mutations don't trigger re-renders,
-    // so the channel was never created at all.
     if (!room?.id) return;
     const roomId = room.id;
 
     const channel = supabase
       .channel(`lobby:${roomId}`)
-      // ── Players changes ──────────────────────────────────────────────────
       .on(
         "postgres_changes",
         {
@@ -252,11 +231,9 @@ export default function LobbyPage() {
           filter: `room_id=eq.${roomId}`,
         },
         async () => {
-          // Small delay for write propagation
           await new Promise((r) => setTimeout(r, 200));
           const data = await fetchPlayers(roomId);
 
-          // Host handoff if the current host left
           const currentRoom = roomRef.current;
           if (!currentRoom) return;
           const hostStillHere = data.some(
@@ -269,17 +246,14 @@ export default function LobbyPage() {
                 new Date(b.joined_at).getTime(),
             )[0];
             if (earliest.id === myPlayerIdRef.current) {
-              const newHost = data[Math.floor(Math.random() * data.length)];
               await supabase
                 .from("rooms")
-                .update({ host_id: newHost.id })
+                .update({ host_id: earliest.id })
                 .eq("id", currentRoom.id);
             }
           }
         },
       )
-      // ── Room changes ─────────────────────────────────────────────────────
-      // ── Rooms UPDATE handler (inside the useEffect channel setup) ──
       .on(
         "postgres_changes",
         {
@@ -291,32 +265,24 @@ export default function LobbyPage() {
         async (payload) => {
           const updated = payload.new as Room;
           const previous = payload.old as Partial<Room>;
-
           setRoom(updated);
           roomRef.current = updated;
 
-          // KEY FIX: only fetch players when something player-relevant changed.
-          // Settings fields (describe_seconds, discuss_seconds, vote_seconds,
-          // spy_count, min_players, max_players) have zero effect on who is
-          // in the room — so skip the fetch entirely when only those changed.
           const playerRelevantFields: (keyof Room)[] = ["status", "host_id"];
           const playerRelevantChanged = playerRelevantFields.some(
             (field) =>
               previous[field] !== undefined &&
               previous[field] !== updated[field],
           );
-
           if (playerRelevantChanged) {
             await fetchPlayers(roomId);
           }
-          // Settings-only patch: room state is updated above, players untouched.
 
           if (updated.status === "playing") {
             router.push(`/room/${code}/game`);
           }
         },
       )
-      // ── Chat messages ────────────────────────────────────────────────────
       .on(
         "postgres_changes",
         {
@@ -328,50 +294,20 @@ export default function LobbyPage() {
         (payload) =>
           setMessages((prev) => [...prev, payload.new as ChatMessage]),
       )
-      // ── Presence — detect disconnects ────────────────────────────────────
-      .on("presence", { event: "leave" }, async ({ leftPresences }: any) => {
-        for (const presence of leftPresences) {
-          if (!presence.playerId || presence.playerId === myPlayerIdRef.current)
-            continue;
-          // Debounce: wait 3s, then check if player is still in Supabase
-          setTimeout(async () => {
-            const { data } = await supabase
-              .from("players")
-              .select("id")
-              .eq("id", presence.playerId)
-              .maybeSingle();
-            // If they reconnected, they would have rejoined and the row still exists.
-            // Only delete if the player row is still there but has gone truly offline.
-            // A safer heuristic: don't auto-delete at all; let the host kick instead.
-            // For now, just skip auto-deletion entirely:
-          }, 3000);
-        }
-      })
       .subscribe();
 
-    channel.track({ playerId: myPlayerId });
     return () => {
       supabase.removeChannel(channel);
     };
-    // Depend on room?.id only (not the full room object) so the channel is
-    // created once the room ID is known and never rebuilt on settings changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room?.id, code, router, myPlayerId, fetchPlayers]);
 
-  // Workaround 3: re-fetch players whenever the tab becomes visible again.
-  // This fires on browser reload (page becomes visible after being hidden
-  // during unload) and on tab switch-back, catching any events missed while
-  // the Supabase Realtime channel was reconnecting.
+  // Re-fetch on tab visibility (catches events missed while Realtime was reconnecting)
   useEffect(() => {
     if (!room?.id) return;
     const roomId = room.id;
-
     function handleVisibility() {
-      if (document.visibilityState === "visible") {
-        fetchPlayers(roomId);
-      }
+      if (document.visibilityState === "visible") fetchPlayers(roomId);
     }
-
     document.addEventListener("visibilitychange", handleVisibility);
     return () =>
       document.removeEventListener("visibilitychange", handleVisibility);
@@ -406,17 +342,12 @@ export default function LobbyPage() {
   }
 
   async function updateSetting(key: string, value: number) {
-    // Optimistic local update — only touches room settings fields, never players
     setRoom((prev) => (prev ? { ...prev, [key]: value } : prev));
-
-    // Fire and forget — Realtime will confirm. The rooms UPDATE handler
-    // now ignores player-irrelevant field changes, so no fetchPlayers runs.
     await fetch(`/api/rooms/${code}/settings`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ [key]: value }),
     });
-    // Removed: do NOT call fetchPlayers here (was causing the cascade)
   }
 
   async function handleLeave() {
@@ -460,6 +391,20 @@ export default function LobbyPage() {
       </div>
     );
 
+  if (error)
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="text-center space-y-3">
+          <p className="text-lg font-semibold" style={{ color: "var(--text)" }}>
+            {error}
+          </p>
+          <Button variant="secondary" onClick={() => router.push("/")}>
+            Go Home
+          </Button>
+        </div>
+      </div>
+    );
+
   const shareUrl =
     typeof window !== "undefined"
       ? `${window.location.origin}/room/${code}`
@@ -485,9 +430,7 @@ export default function LobbyPage() {
             <span>🕵️</span>
             <span className="hidden sm:inline">WordSpy</span>
           </button>
-
           <span style={{ color: "var(--border-2)" }}>/</span>
-
           <div className="flex items-center gap-2 flex-1">
             <span
               className="font-display font-bold text-sm tracking-widest"
@@ -518,7 +461,6 @@ export default function LobbyPage() {
               QR
             </button>
           </div>
-
           <div className="flex items-center gap-2 shrink-0">
             <ThemeToggle />
             {isHost && (
@@ -827,13 +769,13 @@ export default function LobbyPage() {
           </div>
         </div>
 
-        {/* RIGHT — desktop chat */}
+        {/* RIGHT — desktop chat (fixed height = screen minus header) */}
         <div
           className="hidden lg:flex flex-col w-80 xl:w-96 border-l shrink-0"
-          style={{ borderColor: "var(--border)" }}
+          style={{ borderColor: "var(--border)", height: "calc(100vh - 52px)" }}
         >
           <div
-            className="px-4 py-3 border-b flex items-center justify-between"
+            className="px-4 py-3 border-b flex items-center justify-between shrink-0"
             style={{ borderColor: "var(--border)" }}
           >
             <p
@@ -877,7 +819,7 @@ export default function LobbyPage() {
   );
 }
 
-// ── Chat Panel ─────────────────────────────────────────────────────────────────
+// ── Chat Panel ────────────────────────────────────────────────────────────────
 function ChatPanel({
   messages,
   players,
@@ -905,11 +847,11 @@ function ChatPanel({
 }) {
   return (
     <div
-      className={`flex flex-col rounded-2xl overflow-hidden lg:rounded-none ${fullHeight ? "flex-1" : ""}`}
+      className={`flex flex-col rounded-2xl overflow-hidden lg:rounded-none ${fullHeight ? "flex-1 min-h-0" : ""}`}
       style={{ border: "1px solid var(--border)", background: "var(--card)" }}
     >
       <div
-        className="lg:hidden px-4 py-3 border-b flex items-center justify-between"
+        className="lg:hidden px-4 py-3 border-b flex items-center justify-between shrink-0"
         style={{ borderColor: "var(--border)" }}
       >
         <p
@@ -923,7 +865,7 @@ function ChatPanel({
         </span>
       </div>
       <div
-        className={`overflow-y-auto px-3 py-3 space-y-3 ${fullHeight ? "flex-1" : "h-48"}`}
+        className={`overflow-y-auto px-3 py-3 space-y-3 ${fullHeight ? "flex-1 min-h-0" : "h-48"}`}
       >
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-2 py-4">
@@ -999,7 +941,7 @@ function ChatPanel({
         <div ref={chatEndRef} />
       </div>
       <div
-        className="border-t px-3 py-2.5 flex gap-2"
+        className="border-t px-3 py-2.5 flex gap-2 shrink-0"
         style={{ borderColor: "var(--border)", background: "var(--bg-2)" }}
       >
         <input
@@ -1045,7 +987,7 @@ function ChatPanel({
   );
 }
 
-// ── Settings Modal ─────────────────────────────────────────────────────────────
+// ── Settings Modal ────────────────────────────────────────────────────────────
 function SettingsModal({
   room,
   players,
@@ -1103,7 +1045,6 @@ function SettingsModal({
             ✕
           </button>
         </div>
-
         <div className="flex border-b" style={{ borderColor: "var(--border)" }}>
           {tabs.map((tab) => (
             <button
@@ -1125,7 +1066,6 @@ function SettingsModal({
             </button>
           ))}
         </div>
-
         <div className="p-5 space-y-4 max-h-[55vh] overflow-y-auto">
           {settingsTab === "game" && (
             <div className="space-y-4">
@@ -1208,10 +1148,8 @@ function SettingsModal({
               </div>
             </div>
           )}
-
           {settingsTab === "players" && (
             <div className="space-y-4">
-              {/* BUG FIX: min_players default raised to 3 to match game mechanics */}
               <SettingCard
                 icon="👥"
                 label="Minimum Players"
@@ -1234,7 +1172,6 @@ function SettingsModal({
               />
             </div>
           )}
-
           {settingsTab === "timers" && (
             <div className="space-y-4">
               <TimerSetting
@@ -1277,7 +1214,6 @@ function SettingsModal({
             </div>
           )}
         </div>
-
         <div className="px-5 pb-5">
           <Button variant="primary" size="lg" onClick={onClose}>
             Done
@@ -1393,6 +1329,7 @@ function TimerSetting({
   useEffect(() => {
     setInputVal(String(value));
   }, [value]);
+
   function handleBlur() {
     const n = parseInt(inputVal);
     if (!isNaN(n)) {
